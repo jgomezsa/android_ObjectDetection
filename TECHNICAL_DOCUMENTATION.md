@@ -1,0 +1,328 @@
+# Technical documentation
+
+Everything a developer needs to build, understand, measure and change the app. The [README](README.md) is the user-facing introduction.
+
+## 1. Overview
+
+An Android app (Kotlin, Jetpack Compose) that runs YOLOX object detection on live camera frames, entirely on the device, and draws boxes with labels over the
+analysed camera picture. The user picks one of two models (YOLOX-s or YOLOX-Tiny). The model runs on the phone's **GPU through LiteRT**, and falls back to the **CPU**
+(also LiteRT) when the GPU cannot run it. The camera is read with **Camera2**, which can reach the ultrawide lens on phones that hide it from CameraX.
+
+- Package `com.example.objectdetection`, single module `:app`, entry point `MainActivity.kt`
+- Remote: https://github.com/jgomezsa/android_ObjectDetection
+- Tested on a Poco X7 Pro (Dimensity 8400-Ultra, Mali GPU, MediaTek APU, Android 15 / HyperOS)
+
+## 2. Stack and toolchain
+
+| Item | Version / note |
+|---|---|
+| Kotlin | 2.0.21 (`-Xskip-metadata-version-check` is set because LiteRT 2.3.0 is built with a newer Kotlin) |
+| Android Gradle Plugin / Gradle | 8.7.3 / 8.9 (wrapper, committed) |
+| JDK | 17 (Microsoft OpenJDK), `JAVA_HOME` set as a user env var |
+| compileSdk / targetSdk / minSdk | 35 / 35 / 26 (adaptive icons need no PNG fallbacks) |
+| UI | Jetpack Compose, Material 3, BOM 2024.10.01 |
+| Camera | Camera2 (platform API, no library) |
+| Inference | LiteRT `com.google.ai.edge.litert:litert` and `litert-gpu` 2.3.0, `CompiledModel` with the GPU or CPU accelerator |
+| Unit tests | JUnit 4 in `app/src/test/` (host JVM, no device) |
+
+Versions live in the Gradle Kotlin DSL files. Android Studio-only files are not used (`.idea/` is ignored).
+
+## 3. Development environment (Windows 11)
+
+- Android SDK at `%LOCALAPPDATA%\Android\Sdk` (`ANDROID_HOME`), installed with the command-line tools only: platform-tools, `platforms;android-35`,
+  `build-tools;35.0.0`, emulator, `system-images;android-35;google_apis;x86_64`.
+- User PATH includes `platform-tools`, `cmdline-tools\latest\bin`, `emulator` (open a new terminal after changes).
+- `local.properties` (git-ignored) holds `sdk.dir`; regenerate it if the SDK moves.
+- AVD `Pixel_API35` (Pixel 7, API 35, x86_64). The emulator needs CPU virtualization (BIOS + Windows Hypervisor Platform);
+  `emulator -accel-check` should report "WHPX is installed and usable". The emulator camera only shows a virtual scene; a real phone is needed for real tests.
+- VS Code extensions: `fwcd.kotlin` (language server) and `mathiasfrohlich.Kotlin` (syntax).
+- Python tooling (model export, conversion, icon) runs through `uv` (`uv run --python 3.12 --with <packages> ...`); no global Python.
+- Shell is PowerShell; use `.\gradlew.bat` (not `./gradlew`).
+
+### Running on a physical phone
+
+1. Settings > About phone > tap "Build number" 7 times to enable Developer options.
+2. Developer options > "USB debugging" (or "Wireless debugging" and `adb pair`). On Xiaomi/Poco/Redmi also enable "Install via USB" and
+   "USB debugging (Security settings)", keep the phone unlocked and accept the install prompt (otherwise `INSTALL_FAILED_USER_RESTRICTED`).
+3. Connect via USB, accept the RSA prompt, check `adb devices` shows `device`.
+4. `.\gradlew.bat installDebug`, then launch from the phone or `adb shell am start -n com.example.objectdetection/.MainActivity`.
+
+## 4. Commands
+
+```powershell
+.\gradlew.bat test assembleDebug         # verify after any change (unit tests + debug APK)
+.\gradlew.bat installDebug               # build + install on the connected device/emulator
+adb shell am start -n com.example.objectdetection/.MainActivity
+adb devices                              # list phones/emulators
+adb logcat -s AndroidRuntime:E           # crash logs
+adb logcat -s Inference:D Camera2:D      # per-frame timing, model load, backend used, chosen camera and zoom stops
+emulator -avd Pixel_API35                # start the emulator
+sdkmanager --list_installed              # SDK packages
+```
+
+Add `--no-daemon` to Gradle if memory is tight. Screenshot: `adb shell screencap -p /sdcard/s.png` then `adb pull /sdcard/s.png`
+(PowerShell `>` redirection corrupts binary). The screenshot is black when the phone is locked or its screen is off.
+
+Developer overrides (no UI), to benchmark a model/backend combination:
+
+```powershell
+adb shell am start -n com.example.objectdetection/.MainActivity --es model yolox_tiny --es backend CPU
+# model: yolox_s | yolox_tiny (asset name without .tflite); backend: GPU | CPU (forces a single backend, no fallback)
+adb shell "run-as com.example.objectdetection sh -c 'rm -rf /data/data/com.example.objectdetection/cache/*'"   # clear the GPU program cache (cold-start test)
+```
+
+The model picked in the UI is remembered (`SharedPreferences` "settings", key `model`); the `model` override is not saved.
+
+## 5. Architecture
+
+### 5.1 Frame pipeline
+
+```
+Camera2 ImageReader (YUV_420_888, 3 buffers, acquireLatestImage, 4:3 around 1280x960)
+  -> YuvConverter: YUV -> ARGB (BT.601 full range) and rotation to upright in one pass, rows split over the CPU cores -> Bitmap
+  -> LetterboxRenderer: scale to fit a square (gray 114 padding) -> ARGB pixels
+  -> NHWC float tensor, BGR 0..255 (YOLOX is not normalised)
+  -> model -> [1, anchors, 85]  (raw x, y, w, h + objectness + 80 class scores per anchor; anchors = 8400 at 640, 3549 at 416)
+  -> YoloxPostProcessor.decode: grid/stride decode, score = objectness x class, > 0.25, class-aware NMS (IoU 0.45), map back to normalized source coordinates
+  -> ShownFrame(bitmap, detections) published to Compose state; FrameView draws that same bitmap letterboxed on a Canvas and the boxes on top
+```
+
+The picture on screen is the analysed frame itself: drawing the bitmap together with its own detections avoids boxes trailing moving objects (an earlier version showed
+the live preview with boxes from an older frame, 100-150 ms behind). The cost is that the picture updates at the detection rate (about 10-25 fps depending on the model),
+and the picture is about one frame time old. The analysis size (`ANALYSIS_WIDTH` x `ANALYSIS_HEIGHT` = 1280x960 in `Camera2Source.kt`, closest supported 4:3 size) is
+also what is recorded; at 640x480 the picture was visibly blurry once scaled to the screen.
+
+Threads: Camera2 callbacks run on a "camera-control" thread; the `ImageReader` listener, the conversion, the detection and the recording all run on a separate
+"camera-image" thread, one frame at a time. While a frame is processed (or a model loads) newer frames replace each other in the `ImageReader`; only the latest is taken next.
+Results are published to Compose state.
+
+### 5.2 Components (`app/src/main/java/com/example/objectdetection/`)
+
+| File | Role |
+|---|---|
+| `MainActivity.kt` | Edge-to-edge host (`enableEdgeToEdge()`, `Scaffold` with `innerPadding` on the root), CAMERA permission gate, reads the `model` / `backend` launch extras |
+| `CameraScreen.kt` | Screen state and layout, analyzer callback (model loading with backend fallback, detection, recording), `ModelSelector`, `FrameTimePlot`, `ZoomSelector`, buttons, `GpuBadge`, `FrameView` |
+| `Camera2Source.kt` | Camera2: camera discovery (including hidden ids), session with an `ImageReader`, zoom, rotation, frame delivery |
+| `CameraPicker.kt` | Orders candidate cameras: the one that zooms out the furthest first (pure Kotlin, unit tested) |
+| `YuvConverter.kt` | YUV_420_888 to rotated ARGB, parallel over row bands (pure Kotlin, unit tested) |
+| `BackendChain.kt` | `Backend` (GPU, CPU) and `BackendChain.firstWorking`: try backends in order until one runs the model (unit tested) |
+| `LiteRtDetector.kt` | LiteRT `CompiledModel` on a given backend: GPU (fp16, program cache) or CPU (XNNPACK threads); runs a self-test on creation; input size derived from the model |
+| `ObjectDetector.kt` | `ObjectDetector` interface, `DetectionResult` (with phase timings), `LetterboxRenderer` |
+| `YoloxPostProcessor.kt` | Grid/stride decode of YOLOX's raw output, then NMS (pure Kotlin, unit tested) |
+| `YoloPostProcessor.kt` | `Detection`, `Letterbox`, box mapping, `nms`, `iou` shared by decoders (pure Kotlin, unit tested) |
+| `ModelName.kt` | `MODELS`, `DEFAULT_MODEL`, `modelDisplayName` |
+| `ZoomPresets.kt` | Zoom stops from the camera's range, selector position/ratio mapping, labels (pure Kotlin, unit tested) |
+| `FrameTimeHistory.kt` | Ring buffer of the last 50 frame times plus `niceMax` (auto-scaled top tick of the plot; pure Kotlin, unit tested) |
+| `DetectionRenderer.kt` | Draws boxes and labels on a native `Canvas` (sizes scale with the frame width); used by the on-screen view and by the recorder |
+| `VideoRecorder.kt` | Records analysed frames plus boxes to an H.264 MP4 (`MediaCodec` surface input, `MediaMuxer`, saved through `MediaStore`) |
+| `RecordingFormat.kt` | Pure helpers for recording: even sizes, bit rate, file name, m:ss time (unit tested) |
+| `CocoLabels.kt` | The 80 COCO class names |
+
+### 5.3 Backends and fallbacks
+
+The policy for every model, now and from here on: **try the GPU first, fall back to the CPU if the model does not run on the GPU.** The user chooses the model, so a
+slow load (for example the one-time GPU compilation) is acceptable; there is no load-time limit.
+
+`createDetector` (`CameraScreen.kt`) calls `BackendChain.firstWorking(BackendChain.DEFAULT_ORDER)` = `[GPU, CPU]`, creating a `LiteRtDetector(context, "<model>.tflite", backend)` for each
+backend until one works. A backend "works" when `CompiledModel.create` succeeds **and** a self-test inference (one run on a gray image) completes with the expected output size and
+only finite values, so a delegate that compiles but cannot run (or returns NaN) is also rejected. If every backend fails the model is reported as failed: a toast appears, the
+previous model is reloaded if there was one, otherwise the top-left text says "Model failed to load" (picking a model again retries).
+
+- **GPU:** `CompiledModel.GpuOptions(precision = FP16, serializationDir = cacheDir, modelCacheKey = "<name>-<asset size>", serializeProgramCache = true)`. The first start of a model
+  compiles OpenCL programs; later starts load them from `cacheDir`. The key includes the asset size so a replaced model never reuses a stale cache. The OS may clear the cache.
+- **CPU:** `Accelerator.CPU` with `CpuOptions(numThreads = cores, clamped to 2..6)` (XNNPACK), fp32.
+- The backend actually used is logged (`loaded <model> <GPU|CPU> in N ms`) and shown by the badge (teal "GPU" or amber "No GPU").
+- Adding a backend (for example NNAPI/NPU) means adding a `Backend` value, its `CompiledModel.Options` in `LiteRtDetector`, and putting it in `DEFAULT_ORDER`.
+- **Possible later improvement (not implemented):** calibrate several backends the first time a model runs on a phone (time a few inferences on each) and remember the fastest.
+  With only GPU and CPU the GPU wins whenever it works, so the simple ordered fallback is used for now.
+
+### 5.4 User interface rules
+
+- Top-left, a row: `FrameTimePlot` in the corner, then to its right the frame processing time in ms (`result.inferenceMs`, i.e. preprocess + model + decode),
+  "Loading…" while a detector is being created, "Paused", or "Model failed to load".
+- `FrameTimePlot` is a small line plot of the last 50 frame times (`FRAME_HISTORY`). Gray axes, two labelled ticks on the vertical axis (auto-scaled
+  maximum from `FrameTimeHistory.niceMax`, and half of it), no horizontal ticks. The history is cleared when a model is (re)loaded.
+- Top-right, a column: the model selector, and below it (once loaded) `GpuBadge`: a chip icon (`res/drawable/ic_chip.xml`, tinted) with "GPU" (teal) or "No GPU" (amber).
+  The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-s ▾"); tapping it opens a dropdown with `MODELS` (the current one has a check mark); choosing
+  another one sets `selectedModel` and `requestedModel`, which the analyzer notices on the next frame and reloads. The choice is saved in `SharedPreferences`.
+  The provider/backend is not named anywhere except the GPU badge.
+- Layout: a `Column` with the picture and its overlays in a weighted `Box` on top, and a fixed 120 dp control strip below it (zoom selector, then Stop/Record), so the
+  controls never cover the image. The picture is letterboxed inside the Box; the plot, time, model selector and badge sit in the Box's corners.
+- `ProcessingButton` ("Stop" with `ic_stop.xml` / "Start" with `ic_play.xml`) flips `processing` (UI state) and `processingFlag` (`AtomicBoolean` read by the analyzer thread).
+  While paused the analyzer only shows the frame (no model run, so the GPU is idle); the picture stays live, boxes are hidden, the detector stays loaded and the plot keeps its values.
+- `RecordButton` (red dot + "Record"; while recording a red square + elapsed m:ss; dimmed while paused). See 5.6.
+- Zoom: the stops come from `ZoomPresets.forRange(min, max)` with the selected camera's zoom range: its minimum when below 1x, 1x, then 2x, 5x, 10x up to the maximum;
+  fewer than two stops hides the control. `ZoomSelector` is a thin line with a dot and label per stop (evenly spaced, 44 dp from the screen edges so the first point is not in the
+  system back-gesture zone) and a white thumb at the current ratio; tap snaps to the nearest stop, dragging slides continuously, and pinching on the picture
+  (`detectTransformGestures`) multiplies the ratio. All three call `setZoom`, which clamps to the stops' range and calls `Camera2Source.setZoom`; the thumb position is interpolated
+  between stops. The analysis frame follows the zoom, so boxes, picture and recorded video all show the zoomed image.
+  Pinch-to-zoom is implemented but was not tested on the device (adb cannot send two-finger gestures); tap and drag were.
+- Edge-to-edge with `Scaffold`; `innerPadding` is applied to the root composable.
+
+### 5.5 Camera (Camera2)
+
+`Camera2Source` replaced CameraX because CameraX only uses the cameras Android lists publicly. On the Poco X7 Pro `CameraManager.cameraIdList` has only id 0 (back, zoom 1-10) and
+id 1 (front), but the characteristics of other ids are readable and some can be opened:
+
+| Id | Listed | Zoom | What it is |
+|---|---|---|---|
+| 0 | yes | 1-10 | main camera |
+| 2 | no | 1-4 | ultrawide physical camera |
+| 3 | no | 0.6-10 | logical camera over physical 0 and 2 (zooming below 1x switches to the ultrawide) |
+| 4 | no | 1-10 | logical camera over 0 and 2 (depth/bokeh features) |
+| 5, 6 | no | - | "system only", refused to apps |
+
+- **Discovery:** the listed ids plus ids 0-9 are probed with `getCameraCharacteristics` (unknown or system-only ids throw and are skipped). Usable cameras are back-facing,
+  `BACKWARD_COMPATIBLE`, with `YUV_420_888` output; zoom range from `CONTROL_ZOOM_RATIO_RANGE` (API 30+, otherwise 1..`SCALER_AVAILABLE_MAX_DIGITAL_ZOOM`).
+- **Choice:** `CameraPicker.order` sorts by lowest minimum zoom, then listed before hidden, then larger maximum zoom, and drops cameras that cannot reach 1x. Each camera is tried in
+  that order until one opens and its session configures, so a phone that refuses the hidden camera ends up on the normal one. Here that selects id 3 (0.6x to 10x).
+- **Session:** one `ImageReader` target (no preview surface), `TEMPLATE_PREVIEW`, continuous-picture autofocus when available, `CONTROL_ZOOM_RATIO` (or a centred `SCALER_CROP_REGION` below
+  API 30). Size: the 4:3 `YUV_420_888` size closest to 1280x960.
+- **Orientation:** clockwise rotation = `(SENSOR_ORIENTATION - display rotation + 360) % 360`, applied inside `YuvConverter`.
+- **Conversion:** full-range BT.601 integer maths, handles planar and interleaved chroma (pixel stride 1 or 2), and writes pixels already rotated; the 8 row bands run in parallel.
+- **Lifecycle:** a `LifecycleEventObserver` starts the source on `ON_START` and stops it (waiting for the image thread) on `ON_STOP`, which also ends a recording; the detector
+  stays loaded. Zoom ratio is kept across restarts.
+- Logcat (`Camera2` tag): every probed camera with its range, and `streaming camera <id> at <size>`.
+
+### 5.6 Video recording
+
+The UI toggles `recordFlag` (`AtomicBoolean`); the image thread owns the `VideoRecorder`: it creates it on the first frame after the flag is set (size = the upright
+analysis frame, rounded down to even) and finishes it on the first frame after the flag clears. After each detection the same bitmap and its detections are drawn onto the
+encoder's input `Surface` (`lockHardwareCanvas`, then `DetectionRenderer`), so boxes always match their frame. Frames are timestamped when drawn, so the video plays at the
+real detection rate. H.264, bit rate `width * height * 4`, key frame every second, no audio, nothing but the camera image and boxes (no plot or buttons).
+
+- Resolution is the analysis resolution (960x1280 upright), exactly what is shown on screen; about 0.45 MB per second of video.
+- Android 10+: written to `Movies/ObjectDetection` through `MediaStore` (pending until finished, deleted if empty), no permission needed. Older versions: the app's own
+  external Movies folder (not shown in the gallery).
+- Pausing detection, stopping the app (`ON_STOP`) or an encoder error ends the recording. A toast tells the user where the video was saved.
+- Logcat: `recording started WxH`, `recording finished, saved=<bool>`.
+
+### 5.7 Logging
+
+Tag `Inference`: `loaded <model> <BACKEND> in N ms` once per load, `zoom range a..b, stops [...]`, and per frame `<model> <BACKEND> T ms (pre a, run b, post c) frame F ms`
+(`frame` also includes the camera conversion). Errors for a model that could not be loaded; warnings for a backend that failed (with the exception).
+
+## 6. Models
+
+Bundled in `app/src/main/assets/` (about 56 MB in total):
+
+| File | Model | Input | Output |
+|---|---|---|---|
+| `yolox_s.tflite` (36 MB) | YOLOX-s | `[1, 640, 640, 3]` | `[1, 8400, 85]` |
+| `yolox_tiny.tflite` (20 MB) | YOLOX-Tiny | `[1, 416, 416, 3]` | `[1, 3549, 85]` |
+
+Source: the official YOLOX release ONNX files
+`https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx` and `.../yolox_tiny.onnx` (code licence Apache-2.0; confirm the weights terms before shipping).
+
+**Model contract.** Input: BGR, 0..255 float, no normalisation, letterboxed with gray 114. Output (the released ONNX is *not* decoded): per anchor `x, y` are offsets from the grid
+cell, `w, h` are log sizes in strides, objectness and the 80 class scores are already sigmoided. `YoloxPostProcessor` decodes `(x + gx) * stride`, `exp(w) * stride`,
+score = objectness x class score, threshold 0.25, class-aware NMS 0.45. Anchors are the grids of strides 8, 16, 32 one after the other, row by row (6400 + 1600 + 400 at 640;
+2704 + 676 + 169 at 416). The input size is read from the model, so other sizes (multiples of 32) work.
+
+### 6.1 Conversion (ONNX to TFLite for the GPU)
+
+`onnx2tf` works on Windows (Ultralytics' own exporter is not involved):
+
+```powershell
+uv run --python 3.12 --with onnx2tf --with tensorflow --with tf_keras --with onnx --with onnxruntime --with onnxsim `
+  --with onnx_graphsurgeon --with sng4onnx --with ai_edge_litert --with psutil --with protobuf `
+  onnx2tf -i yolox_s.onnx -o out -tb tf_converter -b 1
+# use out/yolox_s_float32.tflite as app/src/main/assets/yolox_s.tflite (same for yolox_tiny)
+```
+
+- **`-tb tf_converter -b 1` is mandatory.** The default `flatbuffer_direct` backend leaves dynamic-shape tensors and the GPU delegate fails with "Failed to compile model".
+- Use the **float32** file: the GPU computes in fp16 by itself, and the float16 file has fp16 inputs/outputs.
+- The TFLite input is NHWC; the output keeps `[1, anchors, 85]`.
+- Check a converted model on the host against the ONNX one with `ai_edge_litert.interpreter.Interpreter`: max absolute difference 5.5e-5 (s) and 6.1e-5 (Tiny) on a test image.
+  Run downloaded files only from their own empty folder, and Python with `-I`.
+
+### 6.2 Adding or replacing a model
+
+Put `<name>.tflite` in `assets/`, add the name to `MODELS` and a display name in `modelDisplayName` (`ModelName.kt`). A model with a different output layout needs its own
+decoder; a different number of classes needs `CocoLabels.kt` and `YoloPostProcessor.NUM_CLASSES` updated.
+
+### 6.3 Tried and discarded
+
+- **YOLO11 (AGPL-3.0)** was the original model (`yolo11s`, `yolo11s_480`) and is gone from this repository for licensing reasons; its history stays in the old repository
+  (https://github.com/jgomezsa/android_Yolo11_onnx), including these experiments:
+  - **ONNX Runtime with NNAPI/XNNPACK** as the fallback: ORT for Android has no GPU backend; NNAPI sent the model to the MediaTek APU and compiled it for 6 s (fp32/fp16) or 19-29 s
+    (INT8) on every start because ORT cannot cache; XNNPACK on the CPU took 220-400 ms per frame and about 3 cores. Replaced by LiteRT's own CPU accelerator, which needs no second
+    model file and no ONNX Runtime dependency.
+  - **INT8 quantisation** (QDQ, Conv-only, 32 calibration images): kept 95% of the detections but NNAPI's compile time made it unusable.
+  - **MediaTek NeuroPilot via LiteRT**: the supported SoC list does not include the Dimensity 8400 and it needs ahead-of-time compilation and Play packaging.
+  - **Automatic switch to a lighter model** when below 3 FPS: removed now that the user picks the model.
+- **CameraX** (previous camera layer): replaced by Camera2 to reach the ultrawide lens; see 5.5.
+
+## 7. Measurements (Poco X7 Pro)
+
+Milliseconds from the `Inference` log. "run" is the model, "frame" is the whole image-thread pass including the camera conversion (YUV to rotated bitmap, about 15 ms at 1280x960).
+
+| Backend | Model | Load | run ms | frame ms | notes |
+|---|---|---|---|---|---|
+| GPU | YOLOX-s 640 | 1.1-1.2 s cold, 0.17-0.24 s cached | 45-60 | 63-125 | about 10-15 fps |
+| GPU | YOLOX-Tiny 416 | 1.4 s cold, 0.24 s cached | 20-30 | 36-50 | about 20-25 fps |
+| CPU (LiteRT, XNNPACK) | YOLOX-Tiny 416 | 0.16 s | about 76 | about 95 | about 10 fps |
+| CPU (LiteRT, XNNPACK) | YOLOX-s 640 | 0.4 s | about 290 | about 310 | about 3 fps |
+
+- Numbers vary with scene, temperature and background load; the phone was often charging and warm. Decode takes under 3 ms, preprocessing 3-10 ms.
+- Camera conversion and the Camera2 path cost a bit more than CameraX did, but the 0.6x lens is reachable.
+- Published COCO accuracy (AP, from memory): YOLOX-s 40.5, YOLOX-Tiny about 32.8; YOLO11s was 47.0 (the price of the permissive licence).
+- There is no load-time limit any more (the user picks the model); the GPU path still caches compiled programs so only the first start of each model pays the compilation.
+
+## 8. Icons
+
+### 8.1 Launcher icon
+
+Adaptive icon (API 26+, no PNGs): `ic_launcher_background.xml` (dark gradient), `ic_launcher_foreground.xml` (two detection boxes, teal and amber, each with a pointed
+label tag containing a text bar; a person inside the teal box and a ball inside the amber one) and `ic_launcher_monochrome.xml` (themed icons, Android 13+).
+`mipmap-anydpi-v26/ic_launcher.xml` and `ic_launcher_round.xml` and the manifest entries are hand-written.
+
+The three drawables are generated from one geometry description by `tools/make_icon.py`, which also renders a preview with circle / rounded-square masks and reports how far the
+artwork reaches from the centre (it must stay within 33 dp: the adaptive-icon safe zone is a 66 dp circle):
+
+```powershell
+uv run --python 3.12 --with pillow python tools/make_icon.py app/src/main/res preview.png
+```
+
+Design notes: a plain tab above a box reads as a folder, so the tags are pointed (price-tag shape); objects inside the boxes make it read as "detections".
+
+### 8.2 Other drawables
+
+`res/drawable/ic_chip.xml` (GPU badge), `ic_play.xml`, `ic_stop.xml`, `ic_record.xml` are hand-drawn 24 dp vectors, white, tinted in Compose.
+
+## 9. Testing
+
+`.\gradlew.bat test` runs the JVM unit tests: `YoloPostProcessorTest` (letterbox, box mapping, NMS, IoU), `YoloxPostProcessorTest` (grid/stride decode for 640 and 416, score, NMS),
+`BackendChainTest` (GPU first, CPU fallback, all-fail), `CameraPickerTest` (camera order), `YuvConverterTest` (colours, chroma layouts, rotation), `ZoomPresetsTest` (stops per range,
+selector mapping, labels, model names), `FrameTimeHistoryTest` (window, `niceMax`), `RecordingFormatTest` (even size, bit rate, file name, elapsed time).
+Detection quality, speed, the camera and the UI are checked on the phone with `adb logcat` and screenshots (taps with `adb shell input tap`). Add a unit test for any new logic.
+
+## 10. Licensing
+
+- **The app's own code** has no licence file yet (so all rights are reserved by default). The intention is to keep the option of selling the app and keeping the repository private
+  later, so AGPL/GPL must not be used; choose a permissive licence or a source-available non-commercial one. Anything already published stays available under the licence it was
+  published with. Outside contributions need a written agreement if they are to be used in a closed version.
+- **YOLOX** (code and the released weights): Apache-2.0. Shipping it needs the licence text and attribution, and a note that the model was converted (modified).
+- **LiteRT, Jetpack Compose and the other AndroidX libraries:** Apache-2.0. **COCO annotations / class names:** CC BY 4.0 (attribution).
+- **Not used any more:** Ultralytics YOLO11 (AGPL-3.0); the new repository must never contain YOLO11 files in its history. Avoid YOLOv5/8/10/11 (AGPL), YOLOv7/v9 (GPL-3.0),
+  YOLO-NAS (non-commercial weights); YOLOv4's pretrained weights are described as demo-only, and it is heavier and less accurate.
+- Other permissively licensed models to evaluate later (verify the exact weights licence first): RT-DETR (the original Apache-2.0 repository, not Ultralytics' copy), PP-YOLOE,
+  D-FINE, EfficientDet-Lite and SSD-MobileNet (Apache-2.0), RF-DETR (Apache-2.0 for most sizes).
+- Not legal advice; check the current terms before publishing.
+
+## 11. Known issues and gotchas
+
+- **Gradle `Couldn't delete ...\R.jar` (Windows).** The VS Code Kotlin language server and stray Gradle daemons lock build files. Kill all `java.exe` processes and delete
+  `app\build\intermediates\compile_and_runtime_not_namespaced_r_class_jar`, then rebuild; the language server respawns, so do both in one command.
+- **IDE diagnostics are unreliable.** The language server does not know about `-Xskip-metadata-version-check` ("incompatible version of Kotlin" on LiteRT classes) and is often stale right
+  after an edit (including "Unresolved reference" on `R`). Gradle is the truth.
+- **PowerShell 5.1 and non-ASCII source.** `Get-Content`/`Set-Content` without an explicit UTF-8 encoding corrupt characters such as "…", "▾" and "✓" (mojibake) and may add a BOM;
+  edit Kotlin files with the editor tools or .NET `ReadAllText`/`WriteAllText` with UTF-8.
+- **LiteRT 2.3 and Kotlin.** It is built with a newer Kotlin than 2.0.21; compiling works only with the skip-metadata flag in `app/build.gradle.kts`. Upgrading the Kotlin toolchain
+  would remove the flag.
+- **Dynamic-shape TFLite models** make the GPU path fail (the app then uses the CPU); the reason is in `adb logcat -s Inference:W`.
+- **Hidden cameras are vendor-specific.** Opening an id that is not in `cameraIdList` works on the Poco X7 Pro but may be refused or behave differently on other phones; the picker
+  falls back to the next camera if opening or configuring fails.
+- **Edge taps.** Zoom points too close to the screen edge can be swallowed by the system back gesture; the selector keeps 60 dp from the edge.
+- **First start.** The cold GPU compile takes a few seconds ("Loading…" is shown); a cleared cache brings it back.
+- Release signing is not configured; only debug builds exist.
