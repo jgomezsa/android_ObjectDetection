@@ -112,7 +112,9 @@ Results are published to Compose state.
 | `LiteRtDetector.kt` | LiteRT `CompiledModel` of a `.tflite` (asset or downloaded file) on a given backend: GPU (fp16, program cache) or CPU (XNNPACK threads); self-test on creation; input size and class count derived from the tensors |
 | `OrtDetector.kt` | ONNX Runtime session of a downloaded `.onnx` on the CPU (NCHW float input, direct `FloatBuffer`); shapes checked with `ModelContract`, self-test on creation |
 | `Models.kt` | `ModelFormat` (TFLITE, ONNX) with detection from the first bytes, `ModelInfo`, `BuiltInModels`, `DEFAULT_MODEL`, `ModelRejectedException` (pure Kotlin, unit tested) |
-| `ModelContract.kt` | What a model must look like (square input, `[1, anchors, 5 + classes]`, raw boxes, probabilities) and why it is rejected otherwise (pure Kotlin, unit tested) |
+| `ModelSpec.kt` | `OutputLayout`, `InputConvention` and `ModelSpec`: what kind of model it is and how to feed and decode it (pure Kotlin) |
+| `ModelContract.kt` | Recognises the model type from a test run and rejects unsupported ones with a reason (pure Kotlin, unit tested) |
+| `OutputDecoders.kt` | Decoders for every layout and `InputPacker` (pure Kotlin, unit tested) |
 | `ModelStore.kt` | `ModelStore` (downloaded models on disk), `LabelParser`, `ModelUrl` (pure Kotlin, unit tested) |
 | `ModelDownloader.kt` | https download with redirects, size cap, cancel, plain-language errors (java.net, unit tested against a local socket server) |
 | `ModelInstaller.kt` | Download, detect format, probe on the CPU, check labels, install (needs a `Context`) |
@@ -234,6 +236,29 @@ part so they are always visible; the back gesture closes the overlay (`BackHandl
 - Verified on the Poco X7 Pro: `yolox_nano.tflite` (GPU, 21-25 ms), `yolox_plates_s.onnx` (CPU, 1 class), the Autoware traffic-light ONNX with its labels file (960x960, 3 classes), a web-page link, a
   YOLOv11 face ONNX (rejected as channels-first), an `http://` address and a 404 (rejected), deletion of an unused model and of the selected one.
 
+### 5.7.1 Model types (YOLOX, YOLOv8/11, NMS-free YOLO, DETR)
+
+A model is no longer assumed to be YOLOX. When it is added, `ModelContract.resolve` runs it on a gray image (first the 0..255 scale, then 0..1; the output *structure* does not depend on the picture) and `analyze` recognises the
+output from its sizes, the ONNX shapes when known, and its values. The result is a `ModelSpec` (layout, input size, class count, queries, which output is which, normalised boxes) stored with the model, so
+loading later only verifies the sizes. Each layout fixes the preprocessing and the decoder (`OutputDecoders`, `InputPacker`):
+
+| Layout | Output | Colours / range | Resize | Decoding |
+|---|---|---|---|---|
+| `YOLOX_ROWS` | `[1, anchors, 5 + C]` raw offsets, objectness, probabilities | BGR 0..255 | letterbox | grid/stride decode, score = obj x class, NMS |
+| `V8_CHANNELS_FIRST` (YOLOv8, YOLO11) | `[1, 4 + C, anchors]` cx, cy, w, h, class probabilities | RGB 0..1 | letterbox | best class, NMS; boxes in pixels, or fractions (Ultralytics TFLite) scaled by the input size |
+| `V8_ROWS` | the same transposed | RGB 0..1 | letterbox | as above |
+| `END2END` (YOLOv10) | `[1, 300, 6]` x1, y1, x2, y2, score, class | RGB 0..1 | letterbox | threshold only (pixels or fractions) |
+| `DETR_SPLIT` (RT-DETR, D-FINE) | logits `[1, Q, C]` + boxes `[1, Q, 4]` (normalised cx, cy, w, h), either order | RGB 0..1 | stretched to the square | sigmoid of the best logit > 0.3, no NMS |
+| `DETR_MERGED` | `[1, Q, 4 + C]` normalised box, probabilities | RGB 0..1 | stretched | threshold 0.3 |
+
+Disambiguation: channels-first is tried before rows; the box values decide pixels (above 64), fractions (up to 1.5) or YOLOX raw offsets (small, with 5 + C columns); scores must be probabilities (-0.05..1.05); an
+unknown-shape output is also tried as `Q x (4 + C)` for common query counts. Rejections explain why. Found on real files: Ultralytics TFLite exports have *normalised* boxes and 42000 values that also fit 300 queries x 140, so
+the normalised check must come first (a `ModelContractTest` covers it).
+
+Limits: only a single `float32` image input; the ImageNet mean/std normalisation of the original DETR or RF-DETR is not applied (the model loads but detects nothing useful); segmentation, pose and classification outputs are rejected; the
+class count of an NMS-free output cannot be read from its shape (it takes 80, or the length of the names file). ONNX models with dynamic height/width are fed 640x640.
+Verified on the Poco X7 Pro with the real files: YOLO11n ONNX (CPU, 145 ms run), YOLOv10n ONNX (CPU, 157 ms), RT-DETR v2 r18vd ONNX (CPU, 610 ms), a YOLO11 pothole TFLite (GPU, 30 ms), YOLOX files as before.
+
 ### 5.8 Logging
 
 Tag `Inference`: `loaded <model> <BACKEND> in N ms` once per load, `zoom range a..b, stops [...]`, and per frame `<model> <BACKEND> T ms (pre a, run b, post c) frame F ms`
@@ -281,8 +306,8 @@ Users add models at run time through "Manage models" (5.7); the same rules apply
 - **`.tflite`** runs on the GPU or the CPU. Fixed input size and float tensors are required; int8 (quantised) files usually cannot use the GPU delegate and may fail to load. An ONNX model has to be
   converted on a PC first (6.1); the phone cannot convert models.
 - **`.onnx`** runs on the CPU only (ONNX Runtime), several times slower than `.tflite` on the GPU, but needs no conversion. A dynamic input size is read as 640.
-- **Both must be YOLOX detectors:** square image input, BGR 0..255; output `[1, anchors, 5 + classes]`, undecoded, objectness and class scores already sigmoided. Not supported: YOLOv5/v8/v11, SSD,
-  EfficientDet, RT-DETR, models with built-in NMS or decoded boxes, non-square inputs, archives.
+- **Supported types** (5.7.1): YOLOX, YOLOv8/YOLO11, NMS-free YOLO (YOLOv10), DETR-style (RT-DETR, D-FINE); single square float image input. Not supported: ImageNet-normalised models (original DETR, RF-DETR), SSD,
+  EfficientDet, segmentation/pose/classification, models with extra inputs, archives.
 - **Class names:** 80 classes = COCO names; otherwise a `.txt` with one name per line whose line count equals the class count, or "class N" labels.
 - Downloaded models are the user's responsibility: licence (many YOLOv8/v11 models are AGPL-3.0), source, size (400 MB cap).
 

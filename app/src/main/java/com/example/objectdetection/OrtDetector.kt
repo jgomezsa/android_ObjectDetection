@@ -12,9 +12,10 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 /**
- * Runs a YOLOX ONNX model (NCHW float input `[1, 3, size, size]` in BGR 0..255, output `[1, anchors, 5 + classes]`) with ONNX Runtime on the
- * CPU. ONNX Runtime for Android has no GPU backend, so these models are slower than TFLite ones on the GPU, but a downloaded `.onnx` file
- * needs no conversion. Creation runs the model once and throws when the file does not fit the YOLOX contract.
+ * Runs an ONNX model (NCHW float input `[1, 3, size, size]`) with ONNX Runtime on the CPU; the output can be any supported kind
+ * (see [OutputLayout]). ONNX Runtime for Android has no GPU backend, so these models are slower than TFLite ones on the GPU, but a downloaded
+ * `.onnx` file needs no conversion. Creation runs the model once: for a model that is being checked for the first time
+ * ([ModelInfo.spec] is null) this recognises the kind of model ([ModelSpec]); otherwise it verifies that the model still behaves as recorded.
  */
 class OrtDetector(@Suppress("UNUSED_PARAMETER") context: Context, private val info: ModelInfo, override val backend: Backend = Backend.CPU) : ObjectDetector {
     private val env = OrtEnvironment.getEnvironment()
@@ -22,13 +23,11 @@ class OrtDetector(@Suppress("UNUSED_PARAMETER") context: Context, private val in
     private lateinit var inputName: String
     private lateinit var renderer: LetterboxRenderer
     private lateinit var inputBuffer: FloatBuffer
-    private lateinit var raw: FloatArray
     private lateinit var names: List<String>
-    private var anchors = 0
+    private var size = 0
 
-    var inputSize = 0
-        private set
-    var numClasses = 0
+    /** What kind of model this is; for a model that was just added it is worked out here. */
+    lateinit var spec: ModelSpec
         private set
 
     init {
@@ -39,62 +38,63 @@ class OrtDetector(@Suppress("UNUSED_PARAMETER") context: Context, private val in
                 setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 6))
             }
             session = env.createSession(file.absolutePath, options)
+            if (session.inputNames.size != 1) {
+                throw ModelRejectedException("The model has ${session.inputNames.size} inputs; only models with a single image input are supported.")
+            }
             inputName = session.inputNames.first()
-            val inputShape = (session.inputInfo[inputName]!!.info as TensorInfo).shape
-            val outputShape = (session.outputInfo.values.first().info as? TensorInfo)?.shape
-                ?: throw ModelRejectedException("The model output is not a tensor.")
-            val shape = ModelContract.fromOnnxShapes(inputShape, outputShape)
-            inputSize = shape.inputSize
-            anchors = YoloxPostProcessor.rows(inputSize)
-            renderer = LetterboxRenderer(inputSize)
-            inputBuffer = ByteBuffer.allocateDirect(4 * 3 * inputSize * inputSize).order(ByteOrder.nativeOrder()).asFloatBuffer()
-            selfTest()
+            size = ModelContract.onnxInputSize((session.inputInfo[inputName]!!.info as TensorInfo).shape)
+            inputBuffer = ByteBuffer.allocateDirect(4 * 3 * size * size).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            val known = info.spec
+            spec = if (known == null) {
+                val shapes = session.outputNames.map { name -> (session.outputInfo[name]?.info as? TensorInfo)?.shape }
+                ModelContract.resolve(size, shapes) { value -> run(value) }
+            } else {
+                check(known.inputSize == size) { "The model input is ${size}x$size, expected ${known.inputSize}" }
+                ModelContract.verify(known, run(ModelContract.grayFor(known)))
+                known
+            }
+            renderer = LetterboxRenderer(size)
+            names = LabelParser.namesFor(spec, info.labels)
         } catch (e: Throwable) {
             runCatching { close() }
             throw e
         }
-        Log.d(TAG, "${info.id} ready on the CPU (ONNX Runtime, input ${inputSize}x$inputSize, $numClasses classes)")
+        Log.d(TAG, "${info.id} ready on the CPU (ONNX Runtime, ${spec.family}, input ${size}x$size, ${spec.numClasses} classes)")
     }
 
-    private fun selfTest() {
-        for (i in 0 until inputBuffer.capacity()) inputBuffer.put(i, 114f)
-        val values = run()
-        numClasses = ModelContract.classesFor(inputSize, values.size)
-        raw = values
-        ModelContract.checkValues(values, anchors, 5 + numClasses)
-        names = LabelParser.namesFor(numClasses, info.labels)
+    /** Runs the model on a constant image of [value] and returns the output tensors. */
+    private fun run(value: Float): List<FloatArray> {
+        for (i in 0 until inputBuffer.capacity()) inputBuffer.put(i, value)
+        return runOnInput()
     }
 
-    /** Runs the model on [inputBuffer] and returns the flattened output. */
-    private fun run(): FloatArray {
+    /** Runs the model on the current [inputBuffer] and returns every output flattened. */
+    private fun runOnInput(): List<FloatArray> {
         inputBuffer.rewind()
-        OnnxTensor.createTensor(env, inputBuffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())).use { tensor ->
+        return OnnxTensor.createTensor(env, inputBuffer, longArrayOf(1, 3, size.toLong(), size.toLong())).use { tensor ->
             session.run(mapOf(inputName to tensor)).use { result ->
-                val out = (result[0] as OnnxTensor).floatBuffer
-                out.rewind()
-                val values = if (::raw.isInitialized && raw.size == out.remaining()) raw else FloatArray(out.remaining())
-                out.get(values)
-                return values
+                (0 until result.size()).map { index ->
+                    val tensorOut = result[index] as? OnnxTensor ?: throw ModelRejectedException("An output of the model is not a tensor.")
+                    val out = try {
+                        tensorOut.floatBuffer
+                    } catch (e: Exception) {
+                        throw ModelRejectedException("An output of the model is not made of 32-bit floats, which is all the app can read.")
+                    }
+                    out.rewind()
+                    FloatArray(out.remaining()).also { out.get(it) }
+                }
             }
         }
     }
 
     override fun detect(bitmap: Bitmap): DetectionResult {
         val t0 = System.nanoTime()
-        val letterbox = Letterbox(bitmap.width, bitmap.height, inputSize)
-        val pixels = renderer.render(bitmap, letterbox)
-        // CHW float, BGR in 0..255 as YOLOX was trained.
-        val plane = inputSize * inputSize
-        for (i in 0 until plane) {
-            val p = pixels[i]
-            inputBuffer.put(i, (p and 0xFF).toFloat())
-            inputBuffer.put(plane + i, ((p shr 8) and 0xFF).toFloat())
-            inputBuffer.put(2 * plane + i, ((p shr 16) and 0xFF).toFloat())
-        }
+        val letterbox = Letterbox(bitmap.width, bitmap.height, size, spec.stretch)
+        InputPacker.nchw(renderer.render(bitmap, letterbox), spec.convention, inputBuffer)
         val t1 = System.nanoTime()
-        val values = run()
+        val raw = runOnInput()
         val t2 = System.nanoTime()
-        val detections = YoloxPostProcessor.decode(values, inputSize, letterbox, numClasses = numClasses, names = names)
+        val detections = OutputDecoders.decode(spec, raw, letterbox, names)
         val t3 = System.nanoTime()
         return DetectionResult(
             detections,

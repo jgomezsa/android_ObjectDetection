@@ -15,11 +15,16 @@ data class Detection(
     val label: String = CocoLabels.name(classId),
 )
 
-/** Maps between a source image and the square, gray-padded model input (YOLO "letterbox"). */
-class Letterbox(val srcWidth: Int, val srcHeight: Int, val size: Int) {
-    val scale: Float = min(size.toFloat() / srcWidth, size.toFloat() / srcHeight)
-    val padX: Float = (size - srcWidth * scale) / 2f
-    val padY: Float = (size - srcHeight * scale) / 2f
+/**
+ * Maps between a source image and the square model input. By default the image is scaled to fit and padded with gray (YOLO "letterbox");
+ * with [stretch] it is resized to the whole square without keeping its aspect ratio (what DETR-style models expect).
+ */
+class Letterbox(val srcWidth: Int, val srcHeight: Int, val size: Int, stretch: Boolean = false) {
+    val scaleX: Float = if (stretch) size.toFloat() / srcWidth else min(size.toFloat() / srcWidth, size.toFloat() / srcHeight)
+    val scaleY: Float = if (stretch) size.toFloat() / srcHeight else scaleX
+    val scale: Float get() = scaleX
+    val padX: Float = if (stretch) 0f else (size - srcWidth * scaleX) / 2f
+    val padY: Float = if (stretch) 0f else (size - srcHeight * scaleY) / 2f
 }
 
 /** Helpers shared by the YOLO-style decoders: box mapping, non-maximum suppression and IoU. */
@@ -31,10 +36,10 @@ object YoloPostProcessor {
         l: Float, t: Float, r: Float, b: Float, classId: Int, score: Float, lb: Letterbox,
         label: String = CocoLabels.name(classId),
     ): Detection? {
-        val left = ((l - lb.padX) / lb.scale / lb.srcWidth).coerceIn(0f, 1f)
-        val right = ((r - lb.padX) / lb.scale / lb.srcWidth).coerceIn(0f, 1f)
-        val top = ((t - lb.padY) / lb.scale / lb.srcHeight).coerceIn(0f, 1f)
-        val bottom = ((b - lb.padY) / lb.scale / lb.srcHeight).coerceIn(0f, 1f)
+        val left = ((l - lb.padX) / lb.scaleX / lb.srcWidth).coerceIn(0f, 1f)
+        val right = ((r - lb.padX) / lb.scaleX / lb.srcWidth).coerceIn(0f, 1f)
+        val top = ((t - lb.padY) / lb.scaleY / lb.srcHeight).coerceIn(0f, 1f)
+        val bottom = ((b - lb.padY) / lb.scaleY / lb.srcHeight).coerceIn(0f, 1f)
         return if (right > left && bottom > top) Detection(left, top, right, bottom, classId, score, label) else null
     }
 

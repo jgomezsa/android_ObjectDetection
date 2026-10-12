@@ -44,8 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 val MODEL_FORMAT_NOTES = listOf(
     ".tflite runs on the GPU (fast) or the CPU. It needs a fixed-size float model; int8 (quantised) files usually fall back to the CPU or fail to load. An ONNX model has to be converted on a PC first (onnx2tf).",
     ".onnx runs on the CPU only (ONNX Runtime), so it is several times slower than a .tflite on the GPU, but it needs no conversion.",
-    "Both must be YOLOX detectors: a square input (BGR, values 0 to 255) and an output [1, anchors, 5 + classes] with raw boxes and scores that are already between 0 and 1. The official YOLOX exports and most YOLOX fine-tunes are like that.",
-    "Not supported: YOLOv5/v8/v11 and other families, SSD, EfficientDet, RT-DETR, models with built-in NMS or already decoded boxes, and archives (.zip, .tar.gz).",
+    "The app recognises the type of model by running it once. Supported: YOLOX, YOLOv8 and YOLO11 (output [1, 4 + classes, 8400]), NMS-free YOLO such as YOLOv10 (output [1, 300, 6]), and DETR-style detectors such as RT-DETR and D-FINE (class logits [1, 300, classes] plus boxes [1, 300, 4], or [1, 300, 4 + classes]). Each type gets its own colour order, value range and resizing.",
+    "Not supported: models that need extra inputs, ImageNet-normalised inputs (original DETR, RF-DETR), non-square inputs, SSD, EfficientDet, segmentation, pose or classification models, and archives (.zip, .tar.gz).",
     "Class names: 80 classes use the COCO names. For any other number, give a class names address (a .txt file with one name per line), otherwise boxes say \"class 0\", \"class 1\"...",
     "Download only models you trust and check their licence; some are not free for commercial use.",
 )
@@ -131,7 +131,7 @@ fun ManageModelsDialog(
                                     val size = if (model.sizeBytes >= 1_000_000) "%.1f MB".format(model.sizeBytes / 1_000_000.0) else "${model.sizeBytes / 1000} KB"
                                     val classes = "${model.numClasses} ${if (model.numClasses == 1) "class" else "classes"}"
                                     Text(
-                                        "${model.format.label} • $classes • $size" + if (model.builtIn) " • built in" else "",
+                                        "${model.format.label} • ${model.spec?.family ?: "?"} • $classes • $size" + if (model.builtIn) " • built in" else "",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color.Gray,
                                     )

@@ -13,6 +13,21 @@ class YoloPostProcessorTest {
     }
 
     @Test
+    fun stretch_resizesToTheWholeSquareWithoutPadding() {
+        val lb = Letterbox(1280, 640, 640, stretch = true)
+        assertEquals(0.5f, lb.scaleX, 1e-6f)
+        assertEquals(1f, lb.scaleY, 1e-6f)
+        assertEquals(0f, lb.padX, 1e-6f)
+        assertEquals(0f, lb.padY, 1e-6f)
+        // The right half of the source is model x 320..640 over the full height.
+        val d = YoloPostProcessor.toDetection(320f, 0f, 640f, 640f, 1, 0.5f, lb)!!
+        assertEquals(0.5f, d.left, 1e-5f)
+        assertEquals(1f, d.right, 1e-5f)
+        assertEquals(0f, d.top, 1e-5f)
+        assertEquals(1f, d.bottom, 1e-5f)
+    }
+
+    @Test
     fun toDetection_mapsModelSpaceBackToNormalizedSourceCoordinates() {
         val lb = Letterbox(1280, 640, 640) // scale 0.5, padY 160
         // The right half of the source: model x 320..640, y 160..480.

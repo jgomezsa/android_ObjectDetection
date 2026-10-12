@@ -26,7 +26,7 @@ class ModelStoreTest {
     @Test
     fun installedModelsAreListedWithTheirDetails() {
         val store = ModelStore(File(folder.root, "models"))
-        val info = store.install(download("12345"), ModelFormat.ONNX, "Plates S", 640, 1, listOf("license_plate"), "https://example.com/p.onnx")
+        val info = store.install(download("12345"), ModelFormat.ONNX, "Plates S", ModelSpec.yolox(640, 1), listOf("license_plate"), "https://example.com/p.onnx")
         assertEquals("plates_s", info.id)
         assertEquals("Plates S", info.displayName)
         assertEquals(ModelFormat.ONNX, info.format)
@@ -47,23 +47,23 @@ class ModelStoreTest {
     @Test
     fun modelsWithoutLabelsGetGenericOrCocoNames() {
         val store = ModelStore(File(folder.root, "models"))
-        val three = store.install(download(), ModelFormat.TFLITE, "three", 416, 3, emptyList(), null)
+        val three = store.install(download(), ModelFormat.TFLITE, "three", ModelSpec.yolox(416, 3), emptyList(), null)
         assertEquals(listOf("class 0", "class 1", "class 2"), three.labels)
-        val coco = store.install(download(), ModelFormat.TFLITE, "coco like", 640, 80, emptyList(), null)
+        val coco = store.install(download(), ModelFormat.TFLITE, "coco like", ModelSpec.yolox(640, 80), emptyList(), null)
         assertEquals(CocoLabels.names, coco.labels)
     }
 
     @Test
     fun idsAndNamesStayUnique() {
         val store = ModelStore(File(folder.root, "models"))
-        val first = store.install(download(), ModelFormat.TFLITE, "My Model", 640, 80, emptyList(), null)
-        val second = store.install(download(), ModelFormat.TFLITE, "My Model", 640, 80, emptyList(), null)
+        val first = store.install(download(), ModelFormat.TFLITE, "My Model", ModelSpec.yolox(640, 80), emptyList(), null)
+        val second = store.install(download(), ModelFormat.TFLITE, "My Model", ModelSpec.yolox(640, 80), emptyList(), null)
         assertEquals("my_model", first.id)
         assertEquals("my_model_2", second.id)
         assertEquals("My Model", first.displayName)
         assertEquals("My Model (2)", second.displayName)
         // A name that collides with a built-in one is made unique as well.
-        val clash = store.install(download(), ModelFormat.TFLITE, "YOLOX-S", 640, 80, emptyList(), null)
+        val clash = store.install(download(), ModelFormat.TFLITE, "YOLOX-S", ModelSpec.yolox(640, 80), emptyList(), null)
         assertEquals("yolox_s_2", clash.id)
         assertEquals("YOLOX-S (2)", clash.displayName)
         assertEquals("YOLOX-S (2)", ModelStore(File(folder.root, "models")).find("yolox_s_2")!!.displayName)
@@ -72,7 +72,7 @@ class ModelStoreTest {
     @Test
     fun deleteRemovesTheFolderButNeverBuiltInModels() {
         val store = ModelStore(File(folder.root, "models"))
-        val info = store.install(download(), ModelFormat.TFLITE, "temp", 640, 80, emptyList(), null)
+        val info = store.install(download(), ModelFormat.TFLITE, "temp", ModelSpec.yolox(640, 80), emptyList(), null)
         val dir = info.file!!.parentFile!!
         assertTrue(store.delete("temp"))
         assertFalse(dir.exists())

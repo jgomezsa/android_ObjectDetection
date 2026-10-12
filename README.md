@@ -7,7 +7,7 @@ the app only uses the internet when you ask it to download a model.
 - Recognises the 80 everyday object classes of the COCO dataset (person, car, bottle, laptop, cat, ...)
 - Two models to choose from: **YOLOX-S** (more accurate) and **YOLOX-Tiny** (faster)
 - Runs on the phone's **GPU** when it can, and on the CPU when it cannot
-- **Add your own YOLOX models** (`.tflite` or `.onnx`) from a web address, for example detectors for licence plates or traffic lights, and delete them again
+- **Add your own models** (`.tflite` or `.onnx`) from a web address: YOLOX, YOLOv8, YOLO11, YOLOv10 and DETR-style detectors such as RT-DETR, for example for licence plates or traffic lights; delete them again at any time
 - Zoom from the ultrawide lens up to 10x on phones that allow it
 - Records videos with the boxes drawn on
 - Kotlin, Jetpack Compose, Camera2, LiteRT and ONNX Runtime; tested on a Poco X7 Pro (Android 15)
@@ -92,10 +92,11 @@ A model you add is not selected automatically: pick it from the model menu. Mode
 - **`.tflite`** (TensorFlow Lite / LiteRT) runs on the **GPU** (fast) or the CPU. It must have a fixed input size and use float numbers; `int8` (quantised) files usually cannot use the GPU and
   may not load at all. Models published as ONNX can be converted to `.tflite` on a PC (see the technical documentation); the phone cannot convert them.
 - **`.onnx`** runs on the **CPU only** (ONNX Runtime), so it is several times slower than a `.tflite` on the GPU (a YOLOX-S sized model reaches about 2 to 3 frames per second), but it needs no conversion.
-- **Both must be YOLOX detectors.** The model takes a square picture (blue-green-red values from 0 to 255) and returns `[1, anchors, 5 + classes]`: raw box numbers, an objectness score and one score
-  per class, with the scores already between 0 and 1. The official YOLOX exports and most YOLOX fine-tunes work this way.
-- **Not supported:** YOLOv5, YOLOv8, YOLO11 and other families, SSD, EfficientDet, RT-DETR, models that already include non-maximum suppression or decoded boxes, non-square inputs, and archives
-  (`.zip`, `.tar.gz`: download the model file itself). Many YOLOv8/v11 models are also licensed under the AGPL, which matters if you plan to sell an app.
+- **Supported model types.** The app finds out the type by running the model once and looking at what it returns; each type gets its own colour order, value range and resizing:
+  **YOLOX** (raw `[1, anchors, 5 + classes]`), **YOLOv8 / YOLO11** (`[1, 4 + classes, 8400]`, boxes in pixels or as fractions), **NMS-free YOLO** such as YOLOv10 (`[1, 300, 6]`) and **DETR-style**
+  detectors such as RT-DETR and D-FINE (class logits plus boxes, or `[1, 300, 4 + classes]`). The model takes a single square picture.
+- **Not supported:** models with extra inputs, inputs normalised the ImageNet way (the original DETR, RF-DETR), non-square inputs, SSD, EfficientDet, segmentation, pose or classification models, and archives
+  (`.zip`, `.tar.gz`: download the model file itself). Most YOLOv8/v10/v11 models are licensed under the AGPL, which matters if you plan to sell an app.
 - **Class names:** a model with 80 classes uses the COCO names. For any other number of classes, give the address of a `.txt` file with one name per line (the number of lines must match the
   number of classes); without it the boxes are labelled "class 0", "class 1"...
 - **Size and trust:** files up to 400 MB are accepted. Only download models you trust, and check their licence.

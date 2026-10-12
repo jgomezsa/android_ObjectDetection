@@ -55,18 +55,21 @@ data class ModelInfo(
     val format: ModelFormat,
     val builtIn: Boolean,
     val sizeBytes: Long,
-    val inputSize: Int,
-    val numClasses: Int,
     val labels: List<String>,
     val sourceUrl: String? = null,
     /** The model file for a downloaded model; null for built-in ones. */
     val file: File? = null,
-)
+    /** What kind of model it is and how to feed and decode it; null only for a file that is being checked for the first time. */
+    val spec: ModelSpec? = null,
+) {
+    val inputSize: Int get() = spec?.inputSize ?: 0
+    val numClasses: Int get() = spec?.numClasses ?: 0
+}
 
 object BuiltInModels {
     val all = listOf(
-        ModelInfo("yolox_s", "YOLOX-S", ModelFormat.TFLITE, true, 35_898_432L, 640, 80, CocoLabels.names),
-        ModelInfo("yolox_tiny", "YOLOX-Tiny", ModelFormat.TFLITE, true, 20_260_384L, 416, 80, CocoLabels.names),
+        ModelInfo("yolox_s", "YOLOX-S", ModelFormat.TFLITE, true, 35_898_432L, CocoLabels.names, spec = ModelSpec.yolox(640, 80)),
+        ModelInfo("yolox_tiny", "YOLOX-Tiny", ModelFormat.TFLITE, true, 20_260_384L, CocoLabels.names, spec = ModelSpec.yolox(416, 80)),
     )
 }
 

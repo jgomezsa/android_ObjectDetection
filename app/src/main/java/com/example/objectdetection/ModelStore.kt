@@ -13,6 +13,10 @@ object LabelParser {
         numClasses == YoloPostProcessor.NUM_CLASSES -> CocoLabels.names
         else -> List(numClasses) { "class $it" }
     }
+
+    /** As above for a model [spec]; an NMS-free output does not say how many classes there are, so any list of names is used as it is. */
+    fun namesFor(spec: ModelSpec, labels: List<String>): List<String> =
+        if (spec.layout == OutputLayout.END2END && labels.isNotEmpty()) labels else namesFor(spec.numClasses, labels)
 }
 
 /** An address a model can be downloaded from. */
@@ -60,8 +64,7 @@ class ModelStore(private val root: File) {
         downloaded: File,
         format: ModelFormat,
         displayName: String,
-        inputSize: Int,
-        numClasses: Int,
+        spec: ModelSpec,
         labels: List<String>,
         sourceUrl: String?,
     ): ModelInfo {
@@ -79,8 +82,7 @@ class ModelStore(private val root: File) {
         val props = Properties().apply {
             setProperty("name", name)
             setProperty("format", format.name)
-            setProperty("input", inputSize.toString())
-            setProperty("classes", numClasses.toString())
+            for ((key, value) in spec.toProperties()) setProperty(key, value)
             sourceUrl?.let { setProperty("url", it) }
         }
         File(dir, "model.properties").outputStream().use { props.store(it, null) }
@@ -98,7 +100,7 @@ class ModelStore(private val root: File) {
         val props = Properties().apply { File(dir, "model.properties").inputStream().use { load(it) } }
         val format = ModelFormat.valueOf(props.getProperty("format"))
         val file = File(dir, "model.${format.extension}")
-        val classes = props.getProperty("classes").toInt()
+        val spec = ModelSpec.fromProperties { props.getProperty(it) }
         val labelsFile = File(dir, "labels.txt")
         val labels = if (labelsFile.isFile) LabelParser.parse(labelsFile.readText(Charsets.UTF_8)) else emptyList()
         if (!file.isFile) {
@@ -110,11 +112,10 @@ class ModelStore(private val root: File) {
                 format = format,
                 builtIn = false,
                 sizeBytes = file.length(),
-                inputSize = props.getProperty("input").toInt(),
-                numClasses = classes,
-                labels = LabelParser.namesFor(classes, labels),
+                labels = LabelParser.namesFor(spec, labels),
                 sourceUrl = props.getProperty("url"),
                 file = file,
+                spec = spec,
             )
         }
     } catch (e: Exception) {

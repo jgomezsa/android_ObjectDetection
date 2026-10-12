@@ -24,7 +24,7 @@ interface ObjectDetector : AutoCloseable {
     fun detect(bitmap: Bitmap): DetectionResult
 }
 
-/** Draws a frame into a square, gray-padded model input (YOLO "letterbox") and returns its ARGB pixels. */
+/** Draws a frame into a square model input, letterboxed on gray or stretched (see [Letterbox]), and returns its ARGB pixels. */
 class LetterboxRenderer(private val size: Int) {
     private val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(bitmap)
@@ -33,7 +33,7 @@ class LetterboxRenderer(private val size: Int) {
 
     fun render(source: Bitmap, lb: Letterbox): IntArray {
         canvas.drawColor(Color.rgb(114, 114, 114))
-        val dst = RectF(lb.padX, lb.padY, lb.padX + source.width * lb.scale, lb.padY + source.height * lb.scale)
+        val dst = RectF(lb.padX, lb.padY, lb.padX + source.width * lb.scaleX, lb.padY + source.height * lb.scaleY)
         canvas.drawBitmap(source, null, dst, paint)
         bitmap.getPixels(pixels, 0, size, 0, 0, size, size)
         return pixels

@@ -4,7 +4,7 @@ import android.content.Context
 import java.io.File
 
 /**
- * Adds a model from a web address: downloads it, finds out its format, loads it once to check that it fits the YOLOX contract
+ * Adds a model from a web address: downloads it, finds out its format, loads it once to recognise what kind of model it is
  * (see [ModelContract]), checks the class names, and stores it. Anything that does not pass is rejected with a message for the user.
  * Call from a background thread.
  */
@@ -42,23 +42,24 @@ class ModelInstaller(
             } ?: emptyList()
 
             progress("Checking the model…", null)
-            val shape = probe(temp, format)
-            if (labels.isNotEmpty() && labels.size != shape.numClasses) {
-                throw ModelRejectedException("The model has ${shape.numClasses} classes but the class names file lists ${labels.size}.")
+            val spec = probe(temp, format)
+            // An NMS-free output does not say how many classes there are, so any number of names is accepted for it.
+            if (labels.isNotEmpty() && spec.layout != OutputLayout.END2END && labels.size != spec.numClasses) {
+                throw ModelRejectedException("The model has ${spec.numClasses} classes but the class names file lists ${labels.size}.")
             }
-            return store.install(temp, format, ModelUrl.displayName(parsed.fileName), shape.inputSize, shape.numClasses, labels, parsed.url)
+            return store.install(temp, format, ModelUrl.displayName(parsed.fileName), spec, labels, parsed.url)
         } finally {
             temp.delete()
         }
     }
 
-    /** Loads the model once (on the CPU, which every model can use) and reports its input size and number of classes. */
-    private fun probe(file: File, format: ModelFormat): ModelContract.Shape {
-        val info = ModelInfo("probe", "probe", format, false, file.length(), 0, 0, emptyList(), null, file)
+    /** Loads the model once (on the CPU, which every model can use) and works out what kind of model it is. */
+    private fun probe(file: File, format: ModelFormat): ModelSpec {
+        val info = ModelInfo("probe", "probe", format, false, file.length(), emptyList(), null, file, spec = null)
         return try {
             when (format) {
-                ModelFormat.TFLITE -> LiteRtDetector(context, info, Backend.CPU).use { ModelContract.Shape(it.inputSize, it.numClasses) }
-                ModelFormat.ONNX -> OrtDetector(context, info, Backend.CPU).use { ModelContract.Shape(it.inputSize, it.numClasses) }
+                ModelFormat.TFLITE -> LiteRtDetector(context, info, Backend.CPU).use { it.spec }
+                ModelFormat.ONNX -> OrtDetector(context, info, Backend.CPU).use { it.spec }
             }
         } catch (e: ModelRejectedException) {
             throw e

@@ -9,10 +9,11 @@ import com.google.ai.edge.litert.Environment
 import com.google.ai.edge.litert.TensorBuffer
 
 /**
- * Runs a YOLOX TFLite model (NHWC float input `[1, size, size, 3]` in BGR 0..255, output `[1, anchors, 5 + classes]`) with LiteRT on the
- * given [backend]: the GPU (compiled program cached in the app's cache directory, so only the first start of a model pays the
- * compilation) or the CPU (XNNPACK). The model is a bundled asset (`<id>.tflite`) or a downloaded file. Creation runs the model once
- * and throws if the backend cannot run it or the model does not fit the YOLOX contract, so the caller can move on to the next backend.
+ * Runs a TFLite model (NHWC float input `[1, size, size, 3]`) with LiteRT on the given [backend]: the GPU (compiled program cached in the
+ * app's cache directory, so only the first start of a model pays the compilation) or the CPU (XNNPACK). The model is a bundled asset
+ * (`<id>.tflite`) or a downloaded file, and its output can be any supported kind (see [OutputLayout]). Creation runs the model once: for a
+ * model that is being checked for the first time ([ModelInfo.spec] is null) this recognises the kind of model ([ModelSpec]); otherwise it
+ * verifies that the model still behaves as recorded. It throws if the backend cannot run the model, so the caller can move on to the next one.
  *
  * The model must have static tensor shapes: the GPU delegate rejects dynamic ones (see TECHNICAL_DOCUMENTATION.md for how to convert).
  */
@@ -27,15 +28,9 @@ class LiteRtDetector(context: Context, private val info: ModelInfo, override val
     private lateinit var input: FloatArray
     private lateinit var names: List<String>
 
-    /** Square input side, derived from the size of the model's input tensor. */
-    var inputSize = 0
+    /** What kind of model this is; for a model that was just added it is worked out here. */
+    lateinit var spec: ModelSpec
         private set
-
-    /** Number of classes, derived from the size of the model's output tensor. */
-    var numClasses = 0
-        private set
-
-    private var anchors = 0
 
     init {
         try {
@@ -62,49 +57,45 @@ class LiteRtDetector(context: Context, private val info: ModelInfo, override val
             }
             inputBuffers = model.createInputBuffers()
             outputBuffers = model.createOutputBuffers()
-            val inputElements = inputBuffers[0].readFloat().size
-            inputSize = ModelContract.fromSizes(inputElements, outputBuffers[0].readFloat().size).inputSize
-            anchors = YoloxPostProcessor.rows(inputSize)
-            renderer = LetterboxRenderer(inputSize)
+            val inputSize = ModelContract.tfliteInputSize(inputBuffers[0].readFloat().size)
             input = FloatArray(inputSize * inputSize * 3)
-            selfTest()
+            val known = info.spec
+            spec = if (known == null) {
+                ModelContract.resolve(inputSize, outputBuffers.map { null }) { value -> run(value) }
+            } else {
+                check(known.inputSize == inputSize) { "The model input is ${inputSize}x$inputSize, expected ${known.inputSize}" }
+                ModelContract.verify(known, run(ModelContract.grayFor(known)))
+                known
+            }
+            renderer = LetterboxRenderer(inputSize)
+            names = LabelParser.namesFor(spec, info.labels)
         } catch (e: Throwable) {
             runCatching { close() }
             throw e
         }
-        Log.d(TAG, "${info.id} ready on the ${backend.label} (input ${inputSize}x$inputSize, $numClasses classes)")
+        Log.d(TAG, "${info.id} ready on the ${backend.label} (${spec.family}, input ${spec.inputSize}x${spec.inputSize}, ${spec.numClasses} classes)")
     }
 
-    /** Runs the model once on a gray image; a backend that compiles but cannot run, or a model that is not YOLOX-style, is rejected here. */
-    private fun selfTest() {
-        input.fill(114f)
+    /** Runs the model on a constant image of [value] and returns the output tensors. */
+    private fun run(value: Float): List<FloatArray> {
+        input.fill(value)
         inputBuffers[0].writeFloat(input)
         model.run(inputBuffers, outputBuffers)
-        val raw = outputBuffers[0].readFloat()
-        numClasses = ModelContract.classesFor(inputSize, raw.size)
-        ModelContract.checkValues(raw, anchors, 5 + numClasses)
-        names = LabelParser.namesFor(numClasses, info.labels)
+        return outputBuffers.map { it.readFloat() }
     }
 
     override fun detect(bitmap: Bitmap): DetectionResult {
         val t0 = System.nanoTime()
-        val letterbox = Letterbox(bitmap.width, bitmap.height, inputSize)
-        val pixels = renderer.render(bitmap, letterbox)
-        // HWC float, BGR in 0..255 as YOLOX was trained (TFLite models from onnx2tf are NHWC).
-        for (i in pixels.indices) {
-            val p = pixels[i]
-            input[3 * i] = (p and 0xFF).toFloat()
-            input[3 * i + 1] = ((p shr 8) and 0xFF).toFloat()
-            input[3 * i + 2] = ((p shr 16) and 0xFF).toFloat()
-        }
+        val letterbox = Letterbox(bitmap.width, bitmap.height, spec.inputSize, spec.stretch)
+        InputPacker.nhwc(renderer.render(bitmap, letterbox), spec.convention, input)
         inputBuffers[0].writeFloat(input)
         val t1 = System.nanoTime()
 
         model.run(inputBuffers, outputBuffers)
-        val raw = outputBuffers[0].readFloat()
+        val raw = outputBuffers.map { it.readFloat() }
         val t2 = System.nanoTime()
 
-        val detections = YoloxPostProcessor.decode(raw, inputSize, letterbox, numClasses = numClasses, names = names)
+        val detections = OutputDecoders.decode(spec, raw, letterbox, names)
         val t3 = System.nanoTime()
         return DetectionResult(
             detections,
