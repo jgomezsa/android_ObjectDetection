@@ -2,18 +2,20 @@
 
 Package: `es.jrg.objectdetection`. Privacy policy: https://jgomezsa.github.io/android_ObjectDetection/privacy.html
 
-The app name is a placeholder ("Object Detection" is very common on Play; pick something more distinctive and change `app_name` in
-`app/src/main/res/values/strings.xml`, the feature graphic text in `tools/make_icon.py`, and this file).
+The app is called **Detecta** (launcher label: `app_name` in `app/src/main/res/values/strings.xml`). The Play *title* is set in the Console and may add the words people search for, so
+the app is found both by name and by "object detection". Keep it descriptive, not a list of keywords (Play's metadata policy rejects keyword stuffing).
 
 ## Store listing (English, default language)
 
-**App name** (max 30 characters): Object Detection
+**App name / title** (max 30 characters): Detecta: Object Detection
+
+(Alternatives if you prefer: "Detecta - Object Detector", "Detecta: AI Object Detection".)
 
 **Short description** (max 80): Real-time object detection with your camera, on your phone. No cloud.
 
 **Full description** (max 4000):
 
-Point your camera at the world and see what the app recognises, live, with a box and a name around each object. Everything runs on your phone: nothing is uploaded, no account is needed, and there are no ads.
+Detecta is a real-time object detection app: point your camera at the world and see what it recognises, live, with a box and a name around each object. Everything runs on your phone: nothing is uploaded, no account is needed, and there are no ads.
 
 - Real-time detection of 80 everyday kinds of objects: people, vehicles, animals, furniture, food and more.
 - Uses your phone's GPU when it can, and falls back to the CPU when it cannot.

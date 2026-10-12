@@ -13,3 +13,4 @@ keystore.properties
 *.jks
 *.aab
 store/screenshots/
+dist/

@@ -172,8 +172,8 @@ if len(sys.argv) > 3:
             try: return ImageFont.truetype(p, size)
             except OSError: pass
         return ImageFont.load_default()
-    dr.text((440, 150), "Object Detection", font=font("segoeuib.ttf", 64), fill=(255, 255, 255))
-    dr.text((442, 240), "On-device, in real time.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
-    dr.text((442, 290), "Zoom, record, your own models.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
+    dr.text((440, 130), "Detecta", font=font("segoeuib.ttf", 84), fill=(255, 255, 255))
+    dr.text((442, 250), "Object detection, on your phone.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
+    dr.text((442, 300), "Real time. Zoom, record, your own models.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
     feat.convert("RGB").save(f"{out}/feature-graphic-1024x500.png")
     print("wrote Play graphics to", out)

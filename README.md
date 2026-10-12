@@ -1,4 +1,4 @@
-# Android Object Detection (YOLOX)
+# Detecta: Android object detection (YOLOX)
 
 Point your phone's camera at the world and the app draws a box and a label around every object it recognises,
 live, using an AI model that runs entirely **on the phone**. No server is needed and no image ever leaves the device;
@@ -72,7 +72,7 @@ You can also open the folder in Android Studio and press Run.
 
 ## Using the app
 
-1. Open **Object Detection** and allow the **Camera** permission.
+1. Open **Detecta** and allow the **Camera** permission.
 2. Point the camera at objects. Each one gets a coloured box with its name and a confidence percentage.
 3. The number in the top-left corner is how long the last frame took to process, in milliseconds. The lower it is, the smoother the detection. The small graph to its left shows the same time for the last 50 frames.
 4. The top-right corner shows the model in use. **Tap its name** to open the model menu and switch to another model; your choice is remembered. Loading a model can take a few seconds
