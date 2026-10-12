@@ -310,7 +310,6 @@ fun CameraScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     ModelSelector(selectedModel, models, onSelect = selectModel, onManage = { showManage = true })
-                    if (!loading) GpuBadge(usingGpu)
                 }
             }
             // Controls below the picture, never on top of it.
@@ -327,7 +326,8 @@ fun CameraScreen(
                     ZoomSelector(zoomPoints.value, zoomRatio.value, onChange = setZoom)
                 }
                 if (!loading) Row(
-                    modifier = Modifier.padding(top = 6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     ProcessingButton(processing, onClick = {
@@ -349,6 +349,8 @@ fun CameraScreen(
                             recordFlag.set(recording)
                         },
                     )
+                    Spacer(Modifier.weight(1f))
+                    GpuBadge(usingGpu)
                 }
             }
         }

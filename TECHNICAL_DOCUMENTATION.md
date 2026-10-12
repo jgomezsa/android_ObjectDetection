@@ -155,7 +155,7 @@ previous model is reloaded if there was one, otherwise the top-left text says "M
   "Loading…" while a detector is being created, "Paused", or "Model failed to load".
 - `FrameTimePlot` is a small line plot of the last 50 frame times (`FRAME_HISTORY`). Gray axes, two labelled ticks on the vertical axis (auto-scaled
   maximum from `FrameTimeHistory.niceMax`, and half of it), no horizontal ticks. The history is cleared when a model is (re)loaded.
-- Top-right, a column: the model selector, and below it (once loaded) `GpuBadge`: a chip icon (`res/drawable/ic_chip.xml`, tinted) with "GPU" (teal) or "No GPU" (amber).
+- Top-right, the model selector. The `GpuBadge` (chip icon `res/drawable/ic_chip.xml`, tinted, with "GPU" in teal or "No GPU" in amber) is at the right end of the Stop/Record row below the picture, so it never covers the image.
   The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-S ▾"); tapping it opens a dropdown with every model (built-in and downloaded; the current one has a check mark), a divider, and "Manage models…" (5.8); choosing
   a model sets `selectedModel` and `requestedModel` (ids), which the analyzer notices on the next frame and reloads. The choice is saved in `SharedPreferences`
   (a saved id that no longer exists falls back to `DEFAULT_MODEL`).
