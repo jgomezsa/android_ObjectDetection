@@ -61,10 +61,14 @@ cd android_ObjectDetection
 .\gradlew.bat test                 # unit tests (host JVM, no phone needed)
 .\gradlew.bat assembleDebug        # -> app\build\outputs\apk\debug\app-debug.apk
 .\gradlew.bat installDebug         # build + install on the connected phone
-adb shell am start -n com.example.objectdetection/.MainActivity
+adb shell am start -n es.jrg.objectdetection/.MainActivity
 ```
 
 You can also open the folder in Android Studio and press Run.
+
+**A release build to share with friends.** `.\gradlew.bat assembleRelease` makes `app\build\outputs\apk\release\app-release.apk` (about 85 MB, 64-bit ARM phones only), signed with the author's key when
+`keystore.properties` exists. Send the file; on the phone, open it and allow installing from that source (or use `adb install`). `.gradlew.bat bundleRelease` makes the `.aab` that Google Play takes
+(see section 12 of [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)).
 
 ## Using the app
 
@@ -77,6 +81,8 @@ You can also open the folder in Android Studio and press Run.
    depend on what your phone's camera can do; 0.6x is the ultrawide lens on phones that make it available to apps.
 6. The **Stop** button below the picture pauses the detection (the camera keeps showing the live view, and no boxes are drawn). Press **Start** to resume.
 7. The **Record** button next to it saves a video of what the camera sees, with the boxes drawn on. While recording it shows the elapsed time; press it again to stop. The video is saved in the **Movies/ObjectDetection** folder of your phone (it also shows up in your gallery). Pausing the detection also ends the recording.
+
+8. **About and licences…** (last entry of the model menu) shows the version, the privacy policy and source code links, the licence statement and the third-party notices.
 
 There is nothing else to configure: for each model the app tries the GPU first and uses the CPU if the model does not run there.
 
@@ -187,6 +193,6 @@ More technical detail (architecture, the camera, models and how to convert them,
 - **Models you download** have their own licences (some YOLOv8/v11 models are AGPL-3.0); you are responsible for checking them.
 - **COCO** class names and the dataset the models were trained on: annotations are CC BY 4.0 ([cocodataset.org](https://cocodataset.org/#termsofuse)).
 
-The app's own code is under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may read, run and modify it for noncommercial purposes (personal use, study, research, hobby projects,
+The app's own code is under the [PolyForm Noncommercial License 1.0.0](LICENSE). **This is source-available, not open source** (it is not an OSI-approved licence): you may read, run and modify it for noncommercial purposes (personal use, study, research, hobby projects,
 nonprofits); any commercial use needs the author's permission. The third-party components above keep their own licences. Check the current terms of each component before
 publishing a build; this is not legal advice.

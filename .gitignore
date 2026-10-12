@@ -6,3 +6,10 @@ local.properties
 .idea/
 .kotlin/
 CLAUDE.md
+
+# Release signing: never commit these
+keystore/
+keystore.properties
+*.jks
+*.aab
+store/screenshots/

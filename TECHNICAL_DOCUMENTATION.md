@@ -9,7 +9,7 @@ analysed camera picture. The user picks one of two models (YOLOX-S or YOLOX-Tiny
 (also LiteRT) when the GPU cannot run it. The camera is read with **Camera2**, which can reach the ultrawide lens on phones that hide it from CameraX.
 The user can add more YOLOX models (`.tflite`, or `.onnx` which runs on the CPU through ONNX Runtime) from a web address, and delete them again (5.8).
 
-- Package `com.example.objectdetection`, single module `:app`, entry point `MainActivity.kt`
+- Package `es.jrg.objectdetection`, single module `:app`, entry point `MainActivity.kt`
 - Remote: https://github.com/jgomezsa/android_ObjectDetection
 - Tested on a Poco X7 Pro (Dimensity 8400-Ultra, Mali GPU, MediaTek APU, Android 15 / HyperOS)
 
@@ -48,14 +48,14 @@ Versions live in the Gradle Kotlin DSL files. Android Studio-only files are not 
 2. Developer options > "USB debugging" (or "Wireless debugging" and `adb pair`). On Xiaomi/Poco/Redmi also enable "Install via USB" and
    "USB debugging (Security settings)", keep the phone unlocked and accept the install prompt (otherwise `INSTALL_FAILED_USER_RESTRICTED`).
 3. Connect via USB, accept the RSA prompt, check `adb devices` shows `device`.
-4. `.\gradlew.bat installDebug`, then launch from the phone or `adb shell am start -n com.example.objectdetection/.MainActivity`.
+4. `.\gradlew.bat installDebug`, then launch from the phone or `adb shell am start -n es.jrg.objectdetection/.MainActivity`.
 
 ## 4. Commands
 
 ```powershell
 .\gradlew.bat test assembleDebug         # verify after any change (unit tests + debug APK)
 .\gradlew.bat installDebug               # build + install on the connected device/emulator
-adb shell am start -n com.example.objectdetection/.MainActivity
+adb shell am start -n es.jrg.objectdetection/.MainActivity
 adb devices                              # list phones/emulators
 adb logcat -s AndroidRuntime:E           # crash logs
 adb logcat -s Inference:D Camera2:D      # per-frame timing, model load, backend used, chosen camera and zoom stops
@@ -69,9 +69,9 @@ Add `--no-daemon` to Gradle if memory is tight. Screenshot: `adb shell screencap
 Developer overrides (no UI), to benchmark a model/backend combination:
 
 ```powershell
-adb shell am start -n com.example.objectdetection/.MainActivity --es model yolox_tiny --es backend CPU
+adb shell am start -n es.jrg.objectdetection/.MainActivity --es model yolox_tiny --es backend CPU
 # model: yolox_s | yolox_tiny (asset name without .tflite); backend: GPU | CPU (forces a single backend, no fallback)
-adb shell "run-as com.example.objectdetection sh -c 'rm -rf /data/data/com.example.objectdetection/cache/*'"   # clear the GPU program cache (cold-start test)
+adb shell "run-as es.jrg.objectdetection sh -c 'rm -rf /data/data/es.jrg.objectdetection/cache/*'"   # clear the GPU program cache (cold-start test)
 ```
 
 The model picked in the UI is remembered (`SharedPreferences` "settings", key `model`); the `model` override is not saved.
@@ -99,7 +99,7 @@ Threads: Camera2 callbacks run on a "camera-control" thread; the `ImageReader` l
 "camera-image" thread, one frame at a time. While a frame is processed (or a model loads) newer frames replace each other in the `ImageReader`; only the latest is taken next.
 Results are published to Compose state.
 
-### 5.2 Components (`app/src/main/java/com/example/objectdetection/`)
+### 5.2 Components (`app/src/main/java/es/jrg/objectdetection/`)
 
 | File | Role |
 |---|---|
@@ -412,7 +412,7 @@ Design notes: a plain tab above a box reads as a folder, so the tags are pointed
 `ModelStoreTest` (install, list, unique ids and names, delete safety, damaged folders), `ModelDownloaderTest` (progress, redirects, HTTP errors, size limit, cancel; a tiny `ServerSocket` HTTP server,
 because the Kotlin test compiler cannot see the JDK's `HttpServer`),
 `BackendChainTest` (GPU first, CPU fallback, all-fail), `CameraPickerTest` (camera order), `YuvConverterTest` (colours, chroma layouts, rotation), `ZoomPresetsTest` (stops per range,
-selector mapping, labels, model names), `FrameTimeHistoryTest` (window, `niceMax`), `RecordingFormatTest` (even size, bit rate, file name, elapsed time).
+selector mapping, labels, model names), `FrameTimeHistoryTest` (window, `niceMax`), `RecordingFormatTest` (even size, bit rate, file name, elapsed time), `NoticesTest` (licence notices and the not-open-source statement).
 Detection quality, speed, the camera and the UI are checked on the phone with `adb logcat` and screenshots (taps with `adb shell input tap`). Add a unit test for any new logic.
 
 ## 10. Licensing
@@ -449,4 +449,42 @@ Detection quality, speed, the camera and the UI are checked on the phone with `a
   falls back to the next camera if opening or configuring fails.
 - **Edge taps.** Zoom points too close to the screen edge can be swallowed by the system back gesture; the selector keeps 60 dp from the edge.
 - **First start.** The cold GPU compile takes a few seconds ("Loading…" is shown); a cleared cache brings it back.
-- Release signing is not configured; only debug builds exist.
+- Release builds are signed with the upload key in `keystore.properties` (section 12); without that file the release build is unsigned.
+
+## 12. Publishing (Google Play and test APKs)
+
+Package `es.jrg.objectdetection` (it cannot change after the first upload). Everything for the listing is in `store/` (`listing.md`, `graphics/`), the privacy policy is `docs/privacy.html`.
+
+**Signing.** The upload key is `keystore/upload.jks` (PKCS12, alias `upload`, valid 10000 days); its passwords are in `keystore.properties` at the repository root. Both are git-ignored
+(`keystore/`, `keystore.properties`, `*.jks`, `*.aab`). **Back both files up outside the repository** (password manager, encrypted drive): without them you cannot update the app except through
+Google's upload-key reset. `app/build.gradle.kts` reads `keystore.properties` if it exists and signs the release build with it; without it the release build is unsigned.
+Enrol in Play App Signing when creating the app (the default): Google keeps the real app-signing key and this is only the upload key.
+
+**Builds**
+
+```powershell
+.\gradlew.bat assembleRelease    # app\build\outputs\apk\release\app-release.apk  (signed, installable: for friends)
+.\gradlew.bat bundleRelease      # app\build\outputs\bundle\release\app-release.aab  (what Play wants)
+adb install -r app\build\outputs\apk\release\app-release.apk
+```
+
+Release builds use R8 (`isMinifyEnabled`, `isShrinkResources`, rules in `app/proguard-rules.pro`: ONNX Runtime and LiteRT are kept whole because native code looks classes up by name) and only the `arm64-v8a`
+native libraries. R8 prints a warning about Kotlin metadata (LiteRT is built with a newer Kotlin); it is harmless. Lint's release check is off (`checkReleaseBuilds = false`) because the lint bundled with
+this Android Gradle Plugin crashes on the same newer metadata. The release build was checked on the phone: GPU, CPU fallback, an ONNX model added from a web address with a custom name.
+
+**Sizes (13 Oct 2026).** Debug APK 358 MB (all four ABIs, no shrinking); release APK 85 MB; release AAB 66 MB. Play's limit is 200 MB for the compressed download of the base module, so there is room.
+If it is ever exceeded: Play Asset Delivery puts the models into install-time asset packs (up to 1.5 GB each, 4 GB together) which are still read with `AssetManager`; or build the app without the bundled
+models and download them on first start.
+
+**Bump `versionCode`** (and `versionName`) in `app/build.gradle.kts` for every upload; Play rejects a repeated code.
+
+**Privacy policy hosting.** GitHub Pages serves `docs/` from `main`: Settings > Pages > Deploy from a branch > `main` / `/docs`. The address (https://jgomezsa.github.io/android_ObjectDetection/privacy.html)
+is also in the app (`PRIVACY_POLICY_URL` in `Notices.kt`) and must keep working for as long as the app is on Play. **Pages on a private repository needs a paid GitHub plan**: if the repository is made
+private (the stated plan for a paid version), move the policy to another host first and update `PRIVACY_POLICY_URL` and the Play listing.
+
+**Licence statement.** The app (About screen, `LICENSE_STATEMENT` in `Notices.kt`), the store listing and the README all say that the source is published under the PolyForm Noncommercial License 1.0.0 and that
+this is not an open-source licence. Third-party notices (YOLOX, LiteRT, ONNX Runtime, AndroidX/Kotlin) are in `Notices.all` and shown under About. No AGPL model is bundled or suggested.
+
+**Play Console account.** A personal account created after 13 November 2023 must run a closed test with at least 12 testers opted in for 14 continuous days before it can apply for production access.
+An organisation account needs a D-U-N-S number and is exempt from that rule; it is for registered legal entities. The one-off fee is 25 USD. A free app cannot later be switched to paid
+(add in-app purchases or publish a new app).

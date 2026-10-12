@@ -151,3 +151,29 @@ for yy in range(0, W, 2):
         if a.getpixel((xx, yy)):
             far = max(far, math.hypot(xx / K - 54, yy / K - 54))
 print(f"farthest painted point from centre: {far:.1f} dp (safe-zone radius is 33)")
+
+# ---- Google Play graphics (optional third argument: output folder) ----
+if len(sys.argv) > 3:
+    import os
+    from PIL import ImageFont
+    out = sys.argv[3]
+    os.makedirs(out, exist_ok=True)
+    full.resize((512, 512), Image.LANCZOS).convert("RGB").save(f"{out}/icon-512.png")   # full-bleed: Play applies its own mask
+    FW, FH = 1024, 500
+    feat = Image.new("RGB", (FW, FH)); fp = feat.load()
+    for yy in range(FH):
+        for xx in range(FW):
+            t = (xx / FW * 0.7 + yy / FH * 0.3); fp[xx, yy] = tuple(round(a + (b - a) * t) for a, b in zip(c0, c1))
+    feat = feat.convert("RGBA")
+    feat.alpha_composite(masked(full, "squircle", 300), (90, 100))
+    dr = ImageDraw.Draw(feat)
+    def font(name, size):
+        for p in (f"C:/Windows/Fonts/{name}", name):
+            try: return ImageFont.truetype(p, size)
+            except OSError: pass
+        return ImageFont.load_default()
+    dr.text((440, 150), "Object Detection", font=font("segoeuib.ttf", 64), fill=(255, 255, 255))
+    dr.text((442, 240), "On-device, in real time.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
+    dr.text((442, 290), "Zoom, record, your own models.", font=font("segoeui.ttf", 36), fill=(203, 213, 225))
+    feat.convert("RGB").save(f"{out}/feature-graphic-1024x500.png")
+    print("wrote Play graphics to", out)
