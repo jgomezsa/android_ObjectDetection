@@ -7,6 +7,7 @@ Everything a developer needs to build, understand, measure and change the app. T
 An Android app (Kotlin, Jetpack Compose) that runs YOLOX object detection on live camera frames, entirely on the device, and draws boxes with labels over the
 analysed camera picture. The user picks one of two models (YOLOX-S or YOLOX-Tiny). The model runs on the phone's **GPU through LiteRT**, and falls back to the **CPU**
 (also LiteRT) when the GPU cannot run it. The camera is read with **Camera2**, which can reach the ultrawide lens on phones that hide it from CameraX.
+The user can add more YOLOX models (`.tflite`, or `.onnx` which runs on the CPU through ONNX Runtime) from a web address, and delete them again (5.8).
 
 - Package `com.example.objectdetection`, single module `:app`, entry point `MainActivity.kt`
 - Remote: https://github.com/jgomezsa/android_ObjectDetection
@@ -23,6 +24,8 @@ analysed camera picture. The user picks one of two models (YOLOX-S or YOLOX-Tiny
 | UI | Jetpack Compose, Material 3, BOM 2024.10.01 |
 | Camera | Camera2 (platform API, no library) |
 | Inference | LiteRT `com.google.ai.edge.litert:litert` and `litert-gpu` 2.3.0, `CompiledModel` with the GPU or CPU accelerator |
+| ONNX | ONNX Runtime Android 1.20.0 (`onnxruntime-android`), CPU only, for downloaded `.onnx` models |
+| Permissions | `CAMERA`; `INTERNET`, used only by the downloads of "Manage models" (https only) |
 | Unit tests | JUnit 4 in `app/src/test/` (host JVM, no device) |
 
 Versions live in the Gradle Kotlin DSL files. Android Studio-only files are not used (`.idea/` is ignored).
@@ -106,11 +109,17 @@ Results are published to Compose state.
 | `CameraPicker.kt` | Orders candidate cameras: the one that zooms out the furthest first (pure Kotlin, unit tested) |
 | `YuvConverter.kt` | YUV_420_888 to rotated ARGB, parallel over row bands (pure Kotlin, unit tested) |
 | `BackendChain.kt` | `Backend` (GPU, CPU) and `BackendChain.firstWorking`: try backends in order until one runs the model (unit tested) |
-| `LiteRtDetector.kt` | LiteRT `CompiledModel` on a given backend: GPU (fp16, program cache) or CPU (XNNPACK threads); runs a self-test on creation; input size derived from the model |
+| `LiteRtDetector.kt` | LiteRT `CompiledModel` of a `.tflite` (asset or downloaded file) on a given backend: GPU (fp16, program cache) or CPU (XNNPACK threads); self-test on creation; input size and class count derived from the tensors |
+| `OrtDetector.kt` | ONNX Runtime session of a downloaded `.onnx` on the CPU (NCHW float input, direct `FloatBuffer`); shapes checked with `ModelContract`, self-test on creation |
+| `Models.kt` | `ModelFormat` (TFLITE, ONNX) with detection from the first bytes, `ModelInfo`, `BuiltInModels`, `DEFAULT_MODEL`, `ModelRejectedException` (pure Kotlin, unit tested) |
+| `ModelContract.kt` | What a model must look like (square input, `[1, anchors, 5 + classes]`, raw boxes, probabilities) and why it is rejected otherwise (pure Kotlin, unit tested) |
+| `ModelStore.kt` | `ModelStore` (downloaded models on disk), `LabelParser`, `ModelUrl` (pure Kotlin, unit tested) |
+| `ModelDownloader.kt` | https download with redirects, size cap, cancel, plain-language errors (java.net, unit tested against a local socket server) |
+| `ModelInstaller.kt` | Download, detect format, probe on the CPU, check labels, install (needs a `Context`) |
+| `ManageModelsDialog.kt` | The "Manage models" overlay: list, delete with confirmation, add from addresses, progress/result, format notes (`MODEL_FORMAT_NOTES`) |
 | `ObjectDetector.kt` | `ObjectDetector` interface, `DetectionResult` (with phase timings), `LetterboxRenderer` |
 | `YoloxPostProcessor.kt` | Grid/stride decode of YOLOX's raw output, then NMS (pure Kotlin, unit tested) |
 | `YoloPostProcessor.kt` | `Detection`, `Letterbox`, box mapping, `nms`, `iou` shared by decoders (pure Kotlin, unit tested) |
-| `ModelName.kt` | `MODELS`, `DEFAULT_MODEL`, `modelDisplayName` |
 | `ZoomPresets.kt` | Zoom stops from the camera's range, selector position/ratio mapping, labels (pure Kotlin, unit tested) |
 | `FrameTimeHistory.kt` | Ring buffer of the last 50 frame times plus `niceMax` (auto-scaled top tick of the plot; pure Kotlin, unit tested) |
 | `DetectionRenderer.kt` | Draws boxes and labels on a native `Canvas` (sizes scale with the frame width); used by the on-screen view and by the recorder |
@@ -128,6 +137,8 @@ backend until one works. A backend "works" when `CompiledModel.create` succeeds 
 only finite values, so a delegate that compiles but cannot run (or returns NaN) is also rejected. If every backend fails the model is reported as failed: a toast appears, the
 previous model is reloaded if there was one, otherwise the top-left text says "Model failed to load" (picking a model again retries).
 
+- **ONNX models** (`ModelFormat.ONNX`) have a single backend, the CPU through ONNX Runtime (`createDetector` filters the order to `[CPU]`; forcing `--es backend GPU` on one fails with
+  "No backend could run the model"). ONNX Runtime for Android has no GPU provider; NNAPI was tried earlier and compiled for 6-29 s on every start, so it is not used.
 - **GPU:** `CompiledModel.GpuOptions(precision = FP16, serializationDir = cacheDir, modelCacheKey = "<name>-<asset size>", serializeProgramCache = true)`. The first start of a model
   compiles OpenCL programs; later starts load them from `cacheDir`. The key includes the asset size so a replaced model never reuses a stale cache. The OS may clear the cache.
 - **CPU:** `Accelerator.CPU` with `CpuOptions(numThreads = cores, clamped to 2..6)` (XNNPACK), fp32.
@@ -143,8 +154,9 @@ previous model is reloaded if there was one, otherwise the top-left text says "M
 - `FrameTimePlot` is a small line plot of the last 50 frame times (`FRAME_HISTORY`). Gray axes, two labelled ticks on the vertical axis (auto-scaled
   maximum from `FrameTimeHistory.niceMax`, and half of it), no horizontal ticks. The history is cleared when a model is (re)loaded.
 - Top-right, a column: the model selector, and below it (once loaded) `GpuBadge`: a chip icon (`res/drawable/ic_chip.xml`, tinted) with "GPU" (teal) or "No GPU" (amber).
-  The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-S ▾"); tapping it opens a dropdown with `MODELS` (the current one has a check mark); choosing
-  another one sets `selectedModel` and `requestedModel`, which the analyzer notices on the next frame and reloads. The choice is saved in `SharedPreferences`.
+  The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-S ▾"); tapping it opens a dropdown with every model (built-in and downloaded; the current one has a check mark), a divider, and "Manage models…" (5.8); choosing
+  a model sets `selectedModel` and `requestedModel` (ids), which the analyzer notices on the next frame and reloads. The choice is saved in `SharedPreferences`
+  (a saved id that no longer exists falls back to `DEFAULT_MODEL`).
   The provider/backend is not named anywhere except the GPU badge.
 - Layout: a `Column` with the picture and its overlays in a weighted `Box` on top, and a fixed 120 dp control strip below it (zoom selector, then Stop/Record), so the
   controls never cover the image. The picture is letterboxed inside the Box; the plot, time, model selector and badge sit in the Box's corners.
@@ -197,7 +209,32 @@ real detection rate. H.264, bit rate `width * height * 4`, key frame every secon
 - Pausing detection, stopping the app (`ON_STOP`) or an encoder error ends the recording. A toast tells the user where the video was saved.
 - Logcat: `recording started WxH`, `recording finished, saved=<bool>`.
 
-### 5.7 Logging
+### 5.7 Manage models (download, check, delete)
+
+"Manage models…" in the model menu opens `ManageModelsDialog`, an overlay drawn over the whole screen inside the main window (a `Box` around the screen content), not a platform
+`Dialog`: on the Poco X7 Pro a `Dialog` window did not receive the keyboard inset, so its bottom buttons stayed under the keyboard, whereas the overlay with
+`windowInsetsPadding(WindowInsets.safeDrawing)` fits above it. The progress or result line and the buttons ("Download and add" / "Cancel download", "Close") sit outside the scrolling
+part so they are always visible; the back gesture closes the overlay (`BackHandler`).
+
+- **List:** `ModelStore.all()` = the built-in models + the folders in `filesDir/models/<id>/`, each with `model.<tflite|onnx>`, `model.properties` (name, format, input size, class count, source
+  address) and optionally `labels.txt`. Damaged or incomplete folders are ignored. Built-in models cannot be deleted; deleting a downloaded one asks for confirmation, removes its folder (ids that
+  would leave `filesDir/models` are refused) and, if it was the selected model, switches to `DEFAULT_MODEL`.
+- **Add** (`ModelInstaller.install`, on a background thread, cancellable):
+  1. The address must be https with a host (`ModelUrl.parse`). 2. `ModelDownloader` downloads to `cacheDir` (redirects followed, 400 MB cap, 15 s connect / 30 s read timeouts); HTTP 401/403 and 404 get
+  their own messages. 3. `ModelFormat.detect` reads the first bytes: TFLite is the FlatBuffer identifier `TFL3` at offset 4; ONNX is a protobuf starting with byte `0x08` (or a `.onnx` name);
+  archives (zip, gzip, bzip2, 7z, tar), web pages (HTML/XML/JSON, for example a Hugging Face `/blob/` link instead of `/resolve/`) and anything else are rejected with an explanation.
+  4. The optional class names file is downloaded (1 MB cap) and parsed (one name per line). 5. **Probe:** the model is loaded once on the CPU (a backend every model can use), which runs the same
+  self-test as a normal load: the input must be a square 3-channel image with a side that is a multiple of 32 (`ModelContract.fromSizes` for TFLite, `fromOnnxShapes` with the real shapes for ONNX;
+  dynamic ONNX sizes assume 640), the output size must be `anchors x (5 + classes)` for that input size, and on a gray test image the values must be finite, the objectness and class scores
+  within 0..1 (`checkValues`) and the box columns small (above 64 means already decoded pixels). A YOLOv8-style `[1, 84, 8400]` output is recognised as channels-first. 6. The class names must match the class
+  count (80 classes without a file use COCO names, other counts without a file get "class N"). 7. `ModelStore.install` moves the file, writes the metadata and makes the id and display name unique.
+  Nothing is added unless every step passes, and the temporary file is always removed.
+- The probe only proves that the model runs on the CPU; the GPU is tried (and the CPU used if it fails) when the model is selected, as for any `.tflite`.
+- Limits: it cannot verify that a `.tflite` input is NHWC or that colours are BGR 0..255 (a model with another convention loads but detects nothing useful), nor that class names are correct.
+- Verified on the Poco X7 Pro: `yolox_nano.tflite` (GPU, 21-25 ms), `yolox_plates_s.onnx` (CPU, 1 class), the Autoware traffic-light ONNX with its labels file (960x960, 3 classes), a web-page link, a
+  YOLOv11 face ONNX (rejected as channels-first), an `http://` address and a 404 (rejected), deletion of an unused model and of the selected one.
+
+### 5.8 Logging
 
 Tag `Inference`: `loaded <model> <BACKEND> in N ms` once per load, `zoom range a..b, stops [...]`, and per frame `<model> <BACKEND> T ms (pre a, run b, post c) frame F ms`
 (`frame` also includes the camera conversion). Errors for a model that could not be loaded; warnings for a backend that failed (with the exception).
@@ -236,16 +273,25 @@ uv run --python 3.12 --with onnx2tf --with tensorflow --with tf_keras --with onn
 - Check a converted model on the host against the ONNX one with `ai_edge_litert.interpreter.Interpreter`: max absolute difference 5.5e-5 (s) and 6.1e-5 (Tiny) on a test image.
   Run downloaded files only from their own empty folder, and Python with `-I`.
 
-### 6.2 Adding or replacing a model
+### 6.2 Adding or replacing a built-in model, and model formats
 
-Put `<name>.tflite` in `assets/`, add the name to `MODELS` and a display name in `modelDisplayName` (`ModelName.kt`). A model with a different output layout needs its own
-decoder; a different number of classes needs `CocoLabels.kt` and `YoloPostProcessor.NUM_CLASSES` updated.
+Built-in models: put `<id>.tflite` in `assets/` and add a `ModelInfo` to `BuiltInModels` (`Models.kt`). A model with a different output layout needs its own decoder.
+Users add models at run time through "Manage models" (5.7); the same rules apply, and this is what the app tells them (`MODEL_FORMAT_NOTES`, also in the README):
+
+- **`.tflite`** runs on the GPU or the CPU. Fixed input size and float tensors are required; int8 (quantised) files usually cannot use the GPU delegate and may fail to load. An ONNX model has to be
+  converted on a PC first (6.1); the phone cannot convert models.
+- **`.onnx`** runs on the CPU only (ONNX Runtime), several times slower than `.tflite` on the GPU, but needs no conversion. A dynamic input size is read as 640.
+- **Both must be YOLOX detectors:** square image input, BGR 0..255; output `[1, anchors, 5 + classes]`, undecoded, objectness and class scores already sigmoided. Not supported: YOLOv5/v8/v11, SSD,
+  EfficientDet, RT-DETR, models with built-in NMS or decoded boxes, non-square inputs, archives.
+- **Class names:** 80 classes = COCO names; otherwise a `.txt` with one name per line whose line count equals the class count, or "class N" labels.
+- Downloaded models are the user's responsibility: licence (many YOLOv8/v11 models are AGPL-3.0), source, size (400 MB cap).
 
 ### 6.3 Candidate models to try (researched 2026-10-12)
 
 URLs were checked with HEAD requests (HTTP 200) on that date. Licences are what each page says; check them again before shipping. "Raw YOLOX" means the output is the same undecoded
 `[1, anchors, 5 + classes]` layout the app already decodes (verified by running the files on the host), so only the class count and the label list differ.
-The app does not load models from phone storage yet: today a model must be converted on a PC (6.1) and added to `assets/` (6.2).
+The app can download a model from an address at run time (Manage models, 5.7): the "raw YOLOX" `.tflite` files can be added as they are, and the `.onnx` ones run on the CPU without conversion
+(convert them with 6.1 to use the GPU). Only 1-class and 3-class files below need a class names address; the labels file for the Autoware detector is listed with it.
 
 **Drop-in, raw YOLOX output (Apache-2.0)**
 
@@ -305,6 +351,8 @@ Milliseconds from the `Inference` log. "run" is the model, "frame" is the whole 
 | GPU | YOLOX-Tiny 416 | 1.4 s cold, 0.24 s cached | 20-30 | 36-50 | about 20-25 fps |
 | CPU (LiteRT, XNNPACK) | YOLOX-Tiny 416 | 0.16 s | about 76 | about 95 | about 10 fps |
 | CPU (LiteRT, XNNPACK) | YOLOX-S 640 | 0.4 s | about 290 | about 310 | about 3 fps |
+| CPU (ONNX Runtime) | YOLOX-S-sized 640 (downloaded `yolox_plates_s.onnx`) | 0.7 s | about 286 | about 409 | about 2.5 fps |
+| GPU | `yolox_nano.tflite` 416 (downloaded) | 0.3 s | not split out | 21-25 shown | the time shown on screen (preprocess + model + decode) |
 
 - Numbers vary with scene, temperature and background load; the phone was often charging and warm. Decode takes under 3 ms, preprocessing 3-10 ms.
 - Camera conversion and the Camera2 path cost a bit more than CameraX did, but the 0.6x lens is reachable.
@@ -335,6 +383,9 @@ Design notes: a plain tab above a box reads as a folder, so the tags are pointed
 ## 9. Testing
 
 `.\gradlew.bat test` runs the JVM unit tests: `YoloPostProcessorTest` (letterbox, box mapping, NMS, IoU), `YoloxPostProcessorTest` (grid/stride decode for 640 and 416, score, NMS),
+`ModelsTest` (built-in models, format detection from magic bytes, labels, https-only addresses), `ModelContractTest` (shape and value checks, YOLOv8-style and decoded outputs rejected),
+`ModelStoreTest` (install, list, unique ids and names, delete safety, damaged folders), `ModelDownloaderTest` (progress, redirects, HTTP errors, size limit, cancel; a tiny `ServerSocket` HTTP server,
+because the Kotlin test compiler cannot see the JDK's `HttpServer`),
 `BackendChainTest` (GPU first, CPU fallback, all-fail), `CameraPickerTest` (camera order), `YuvConverterTest` (colours, chroma layouts, rotation), `ZoomPresetsTest` (stops per range,
 selector mapping, labels, model names), `FrameTimeHistoryTest` (window, `niceMax`), `RecordingFormatTest` (even size, bit rate, file name, elapsed time).
 Detection quality, speed, the camera and the UI are checked on the phone with `adb logcat` and screenshots (taps with `adb shell input tap`). Add a unit test for any new logic.
@@ -360,6 +411,12 @@ Detection quality, speed, the camera and the UI are checked on the phone with `a
   after an edit (including "Unresolved reference" on `R`). Gradle is the truth.
 - **PowerShell 5.1 and non-ASCII source.** `Get-Content`/`Set-Content` without an explicit UTF-8 encoding corrupt characters such as "…", "▾" and "✓" (mojibake) and may add a BOM;
   edit Kotlin files with the editor tools or .NET `ReadAllText`/`WriteAllText` with UTF-8.
+- **Stale Kotlin incremental compilation.** After large refactors the build can fail with "Daemon compilation failed: null" or with "Unresolved reference" to things that exist. Fix: stop Gradle and Java
+  processes, delete `app\build\kotlin` and `app\build\tmp\kotlin-classes`, and rebuild with `.\gradlew.bat installDebug "-Pkotlin.compiler.execution.strategy=in-process"` (quote the property in PowerShell).
+- **Platform `Dialog` and the keyboard.** A Compose `Dialog` window did not get the keyboard inset on the Poco X7 Pro, hiding its bottom buttons; use an overlay in the main window with
+  `WindowInsets.safeDrawing` (5.7). `adb shell input text` works for typing addresses into text fields; clear a field with many `keyevent 67`.
+- **Debug APK size.** About 342 MB: LiteRT and ONNX Runtime native libraries for four CPU architectures plus 56 MB of models. A release build or bundle splits by architecture; an `abiFilters`
+  setting for `arm64-v8a` would shrink the APK for phones only.
 - **LiteRT 2.3 and Kotlin.** It is built with a newer Kotlin than 2.0.21; compiling works only with the skip-metadata flag in `app/build.gradle.kts`. Upgrading the Kotlin toolchain
   would remove the flag.
 - **Dynamic-shape TFLite models** make the GPU path fail (the app then uses the CPU); the reason is in `adb logcat -s Inference:W`.

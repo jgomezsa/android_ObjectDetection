@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
@@ -61,11 +63,13 @@ import kotlin.math.roundToInt
 private const val FRAME_HISTORY = 50
 
 /**
- * Loads [model] on the first backend that can run it: the GPU, then the CPU (or only the one a developer forces).
- * The user chose the model, so a slow load (GPU compilation) is accepted.
+ * Loads [model] on the first backend that can run it: for a TFLite model the GPU, then the CPU (or only the one a developer forces);
+ * an ONNX model runs on the CPU only (ONNX Runtime has no GPU backend here). The user chose the model, so a slow load is accepted.
  */
-private fun createDetector(context: Context, model: String, backends: List<Backend>): ObjectDetector =
-    BackendChain.firstWorking(backends) { LiteRtDetector(context, "$model.tflite", it) }.second
+private fun createDetector(context: Context, model: ModelInfo, backends: List<Backend>): ObjectDetector = when (model.format) {
+    ModelFormat.TFLITE -> BackendChain.firstWorking(backends) { LiteRtDetector(context, model, it) }.second
+    ModelFormat.ONNX -> BackendChain.firstWorking(backends.filter { it == Backend.CPU }) { OrtDetector(context, model, it) }.second
+}
 
 /**
  * [initialModel] / [forcedBackend] are developer overrides (launch extras `model` / `backend`):
@@ -80,7 +84,12 @@ fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
-    val startModel = remember { initialModel ?: prefs.getString("model", null)?.takeIf { it in MODELS } ?: DEFAULT_MODEL }
+    // Built-in models plus the ones the user downloaded (re-read after adding or deleting).
+    val store = remember { ModelStore(File(context.filesDir, "models")) }
+    val installer = remember { ModelInstaller(context, store) }
+    var models by remember { mutableStateOf(store.all()) }
+    var showManage by remember { mutableStateOf(false) }
+    val startModel = remember { initialModel ?: prefs.getString("model", null)?.takeIf { id -> models.any { it.id == id } } ?: DEFAULT_MODEL }
     val backends = remember { forcedBackend?.let { listOf(it) } ?: BackendChain.DEFAULT_ORDER }
     var result by remember { mutableStateOf(DetectionResult(emptyList(), 0)) }
     // The frame on screen together with the detections computed on that very frame, so boxes never lag behind the picture.
@@ -152,6 +161,7 @@ fun CameraScreen(
             }
             val wanted = requestedModel.get()
             if (wanted != loadedModel && wanted != failedModel.get()) {
+                val wantedInfo = store.find(wanted)
                 // Loading can take many seconds (GPU compilation); show the picture meanwhile.
                 shown = ShownFrame(upright, emptyList())
                 loading = true
@@ -161,7 +171,8 @@ fun CameraScreen(
                 val previous = loadedModel
                 loadedModel = ""
                 try {
-                    val loaded = createDetector(context, wanted, backends)
+                    if (wantedInfo == null) throw ModelRejectedException("The model $wanted is not in the list any more.")
+                    val loaded = createDetector(context, wantedInfo, backends)
                     detector = loaded
                     loadedModel = wanted
                     usingGpu = loaded.backend.isGpu
@@ -172,7 +183,7 @@ fun CameraScreen(
                 } catch (e: Throwable) {
                     Log.e("Inference", "Could not load $wanted", e)
                     failedModel.set(wanted)
-                    toast("Could not load ${modelDisplayName(wanted)}")
+                    toast("Could not load ${wantedInfo?.displayName ?: wanted}")
                     if (previous.isNotEmpty()) {
                         // Go back to the model that was working; it is reloaded on the next frame.
                         selectedModel = previous
@@ -254,84 +265,102 @@ fun CameraScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(contentPadding).background(Color.Black)) {
-        // The picture and its overlays; pinching here zooms the camera.
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, _, zoom, _ -> if (zoom != 1f) setZoom(zoomRatio.value * zoom) }
-                },
-        ) {
-            shown?.let { FrameView(it, Modifier.fillMaxSize()) }
-            Row(
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (!loading && frameTimes.size > 1) {
-                    FrameTimePlot(frameTimes)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(
-                    text = when {
-                        loadFailed -> "Model failed to load"
-                        loading -> "Loading…"
-                        !processing -> "Paused"
-                        else -> "${result.inferenceMs} ms"
+    Box(Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().padding(contentPadding).background(Color.Black)) {
+            // The picture and its overlays; pinching here zooms the camera.
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, _, zoom, _ -> if (zoom != 1f) setZoom(zoomRatio.value * zoom) }
                     },
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-            Column(
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                ModelSelector(selectedModel, MODELS, onSelect = selectModel)
-                if (!loading) GpuBadge(usingGpu)
+                shown?.let { FrameView(it, Modifier.fillMaxSize()) }
+                Row(
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (!loading && frameTimes.size > 1) {
+                        FrameTimePlot(frameTimes)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        text = when {
+                            loadFailed -> "Model failed to load"
+                            loading -> "Loading…"
+                            !processing -> "Paused"
+                            else -> "${result.inferenceMs} ms"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                Column(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    ModelSelector(selectedModel, models, onSelect = selectModel, onManage = { showManage = true })
+                    if (!loading) GpuBadge(usingGpu)
+                }
+            }
+            // Controls below the picture, never on top of it.
+            Column(
+                modifier = Modifier.fillMaxWidth().height(120.dp).padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                if (!loading && zoomPoints.value.size >= 2) {
+                    ZoomSelector(zoomPoints.value, zoomRatio.value, onChange = setZoom)
+                }
+                if (!loading) Row(
+                    modifier = Modifier.padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ProcessingButton(processing, onClick = {
+                        processing = !processing
+                        processingFlag.set(processing)
+                        // Pausing also ends a recording (the analyzer thread saves it on the next frame).
+                        if (!processing) {
+                            recordFlag.set(false)
+                            recording = false
+                        }
+                    })
+                    RecordButton(
+                        recording = recording,
+                        elapsedMs = recordedMs,
+                        enabled = processing,
+                        onClick = {
+                            recording = !recording
+                            if (recording) recordedMs = 0
+                            recordFlag.set(recording)
+                        },
+                    )
+                }
             }
         }
-        // Controls below the picture, never on top of it.
-        Column(
-            modifier = Modifier.fillMaxWidth().height(120.dp).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            if (!loading && zoomPoints.value.size >= 2) {
-                ZoomSelector(zoomPoints.value, zoomRatio.value, onChange = setZoom)
-            }
-            if (!loading) Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                ProcessingButton(processing, onClick = {
-                    processing = !processing
-                    processingFlag.set(processing)
-                    // Pausing also ends a recording (the analyzer thread saves it on the next frame).
-                    if (!processing) {
-                        recordFlag.set(false)
-                        recording = false
-                    }
-                })
-                RecordButton(
-                    recording = recording,
-                    elapsedMs = recordedMs,
-                    enabled = processing,
-                    onClick = {
-                        recording = !recording
-                        if (recording) recordedMs = 0
-                        recordFlag.set(recording)
-                    },
-                )
-            }
+        if (showManage) {
+            ManageModelsDialog(
+                models = models,
+                store = store,
+                installer = installer,
+                onChanged = { models = store.all() },
+                onDeleted = { deleted -> if (deleted.id == selectedModel) selectModel(DEFAULT_MODEL) },
+                onDismiss = { showManage = false },
+            )
         }
     }
 }
 
-/** The model name with a small arrow; tapping it opens a menu to switch model. */
+/** The model name with a small arrow; tapping it opens a menu to switch model, and below a divider "Manage models". */
 @Composable
-private fun ModelSelector(selected: String, models: List<String>, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun ModelSelector(
+    selected: String,
+    models: List<ModelInfo>,
+    onSelect: (String) -> Unit,
+    onManage: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
         Row(
@@ -341,20 +370,28 @@ private fun ModelSelector(selected: String, models: List<String>, onSelect: (Str
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(modelDisplayName(selected), color = Color.White, style = MaterialTheme.typography.titleMedium)
+            Text(models.firstOrNull { it.id == selected }?.displayName ?: selected, color = Color.White, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.width(6.dp))
             Text("▾", color = Color.White, style = MaterialTheme.typography.titleMedium)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             models.forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(modelDisplayName(model) + if (model == selected) "  ✓" else "") },
+                    text = { Text(model.displayName + if (model.id == selected) "  ✓" else "") },
                     onClick = {
                         expanded = false
-                        if (model != selected) onSelect(model)
+                        if (model.id != selected) onSelect(model.id)
                     },
                 )
             }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Manage models…") },
+                onClick = {
+                    expanded = false
+                    onManage()
+                },
+            )
         }
     }
 }

@@ -20,6 +20,7 @@ object YoloxPostProcessor {
         confThreshold: Float = 0.25f,
         iouThreshold: Float = 0.45f,
         numClasses: Int = YoloPostProcessor.NUM_CLASSES,
+        names: List<String> = CocoLabels.names,
     ): List<Detection> {
         val rowSize = 5 + numClasses
         val numAnchors = rows(inputSize)
@@ -48,7 +49,8 @@ object YoloxPostProcessor {
                     val cy = (output[base + 1] + gy) * stride
                     val w = exp(output[base + 2]) * stride
                     val h = exp(output[base + 3]) * stride
-                    YoloPostProcessor.toDetection(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, best, bestScore, letterbox)
+                    val label = names.getOrElse(best) { "class $best" }
+                    YoloPostProcessor.toDetection(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, best, bestScore, letterbox, label)
                         ?.let(candidates::add)
                 }
             }

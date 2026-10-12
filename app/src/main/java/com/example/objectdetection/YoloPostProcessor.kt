@@ -11,9 +11,9 @@ data class Detection(
     val bottom: Float,
     val classId: Int,
     val score: Float,
-) {
-    val label: String get() = CocoLabels.name(classId)
-}
+    /** Class name; COCO names unless the model has its own labels. */
+    val label: String = CocoLabels.name(classId),
+)
 
 /** Maps between a source image and the square, gray-padded model input (YOLO "letterbox"). */
 class Letterbox(val srcWidth: Int, val srcHeight: Int, val size: Int) {
@@ -27,12 +27,15 @@ object YoloPostProcessor {
     const val NUM_CLASSES = 80
 
     /** Model-space corners -> normalized corners of the source image (undo padding and scale). */
-    internal fun toDetection(l: Float, t: Float, r: Float, b: Float, classId: Int, score: Float, lb: Letterbox): Detection? {
+    internal fun toDetection(
+        l: Float, t: Float, r: Float, b: Float, classId: Int, score: Float, lb: Letterbox,
+        label: String = CocoLabels.name(classId),
+    ): Detection? {
         val left = ((l - lb.padX) / lb.scale / lb.srcWidth).coerceIn(0f, 1f)
         val right = ((r - lb.padX) / lb.scale / lb.srcWidth).coerceIn(0f, 1f)
         val top = ((t - lb.padY) / lb.scale / lb.srcHeight).coerceIn(0f, 1f)
         val bottom = ((b - lb.padY) / lb.scale / lb.srcHeight).coerceIn(0f, 1f)
-        return if (right > left && bottom > top) Detection(left, top, right, bottom, classId, score) else null
+        return if (right > left && bottom > top) Detection(left, top, right, bottom, classId, score, label) else null
     }
 
     /** Class-aware non-maximum suppression. */
