@@ -151,5 +151,6 @@ More technical detail (architecture, the camera, models and how to convert them,
 - **LiteRT, Jetpack Compose and the AndroidX libraries**, Apache-2.0.
 - **COCO** class names and the dataset the models were trained on: annotations are CC BY 4.0 ([cocodataset.org](https://cocodataset.org/#termsofuse)).
 
-The app's own code does not have a licence file yet, so by default all rights are reserved by the author. Check the current terms of each component before publishing a
-build; this is not legal advice.
+The app's own code is under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may read, run and modify it for noncommercial purposes (personal use, study, research, hobby projects,
+nonprofits); any commercial use needs the author's permission. The third-party components above keep their own licences. Check the current terms of each component before
+publishing a build; this is not legal advice.

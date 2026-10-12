@@ -341,9 +341,9 @@ Detection quality, speed, the camera and the UI are checked on the phone with `a
 
 ## 10. Licensing
 
-- **The app's own code** has no licence file yet (so all rights are reserved by default). The intention is to keep the option of selling the app and keeping the repository private
-  later, so AGPL/GPL must not be used; choose a permissive licence or a source-available non-commercial one. Anything already published stays available under the licence it was
-  published with. Outside contributions need a written agreement if they are to be used in a closed version.
+- **The app's own code** is under the PolyForm Noncommercial License 1.0.0 (file `LICENSE`, Required Notice: Copyright (c) 2026 Jorge Raúl Gómez): anyone may read, run and modify it for noncommercial
+  purposes, and any commercial use needs the author's permission. The author can keep publishing builds (free now, possibly paid later) and can later make the repository private; copies already
+  published stay available under this licence. Outside contributions need a written agreement if they are to be used in a closed version. Not an OSI open-source licence (it is source-available).
 - **YOLOX** (code and the released weights): Apache-2.0. Shipping it needs the licence text and attribution, and a note that the model was converted (modified).
 - **LiteRT, Jetpack Compose and the other AndroidX libraries:** Apache-2.0. **COCO annotations / class names:** CC BY 4.0 (attribution).
 - **Not used any more:** Ultralytics YOLO11 (AGPL-3.0); the new repository must never contain YOLO11 files in its history. Avoid YOLOv5/8/10/11 (AGPL), YOLOv7/v9 (GPL-3.0),
