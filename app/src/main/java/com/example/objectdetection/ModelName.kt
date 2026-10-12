@@ -6,9 +6,9 @@ val MODELS = listOf("yolox_s", "yolox_tiny")
 /** Model loaded on the first start. */
 const val DEFAULT_MODEL = "yolox_s"
 
-/** Name shown to the user for a model asset: `yolox_s` -> "YOLOX-s", `yolox_tiny` -> "YOLOX-Tiny". Other names are shown as they are. */
+/** Name shown to the user for a model asset: `yolox_s` -> "YOLOX-S", `yolox_tiny` -> "YOLOX-Tiny". Other names are shown as they are. */
 fun modelDisplayName(model: String): String = when (model) {
-    "yolox_s" -> "YOLOX-s"
+    "yolox_s" -> "YOLOX-S"
     "yolox_tiny" -> "YOLOX-Tiny"
     else -> model
 }

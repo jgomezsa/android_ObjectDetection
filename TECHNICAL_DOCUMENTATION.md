@@ -5,7 +5,7 @@ Everything a developer needs to build, understand, measure and change the app. T
 ## 1. Overview
 
 An Android app (Kotlin, Jetpack Compose) that runs YOLOX object detection on live camera frames, entirely on the device, and draws boxes with labels over the
-analysed camera picture. The user picks one of two models (YOLOX-s or YOLOX-Tiny). The model runs on the phone's **GPU through LiteRT**, and falls back to the **CPU**
+analysed camera picture. The user picks one of two models (YOLOX-S or YOLOX-Tiny). The model runs on the phone's **GPU through LiteRT**, and falls back to the **CPU**
 (also LiteRT) when the GPU cannot run it. The camera is read with **Camera2**, which can reach the ultrawide lens on phones that hide it from CameraX.
 
 - Package `com.example.objectdetection`, single module `:app`, entry point `MainActivity.kt`
@@ -143,7 +143,7 @@ previous model is reloaded if there was one, otherwise the top-left text says "M
 - `FrameTimePlot` is a small line plot of the last 50 frame times (`FRAME_HISTORY`). Gray axes, two labelled ticks on the vertical axis (auto-scaled
   maximum from `FrameTimeHistory.niceMax`, and half of it), no horizontal ticks. The history is cleared when a model is (re)loaded.
 - Top-right, a column: the model selector, and below it (once loaded) `GpuBadge`: a chip icon (`res/drawable/ic_chip.xml`, tinted) with "GPU" (teal) or "No GPU" (amber).
-  The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-s ▾"); tapping it opens a dropdown with `MODELS` (the current one has a check mark); choosing
+  The selector (`ModelSelector`) shows the model name with a small arrow ("YOLOX-S ▾"); tapping it opens a dropdown with `MODELS` (the current one has a check mark); choosing
   another one sets `selectedModel` and `requestedModel`, which the analyzer notices on the next frame and reloads. The choice is saved in `SharedPreferences`.
   The provider/backend is not named anywhere except the GPU badge.
 - Layout: a `Column` with the picture and its overlays in a weighted `Box` on top, and a fixed 120 dp control strip below it (zoom selector, then Stop/Record), so the
@@ -208,7 +208,7 @@ Bundled in `app/src/main/assets/` (about 56 MB in total):
 
 | File | Model | Input | Output |
 |---|---|---|---|
-| `yolox_s.tflite` (36 MB) | YOLOX-s | `[1, 640, 640, 3]` | `[1, 8400, 85]` |
+| `yolox_s.tflite` (36 MB) | YOLOX-S | `[1, 640, 640, 3]` | `[1, 8400, 85]` |
 | `yolox_tiny.tflite` (20 MB) | YOLOX-Tiny | `[1, 416, 416, 3]` | `[1, 3549, 85]` |
 
 Source: the official YOLOX release ONNX files
@@ -241,7 +241,49 @@ uv run --python 3.12 --with onnx2tf --with tensorflow --with tf_keras --with onn
 Put `<name>.tflite` in `assets/`, add the name to `MODELS` and a display name in `modelDisplayName` (`ModelName.kt`). A model with a different output layout needs its own
 decoder; a different number of classes needs `CocoLabels.kt` and `YoloPostProcessor.NUM_CLASSES` updated.
 
-### 6.3 Tried and discarded
+### 6.3 Candidate models to try (researched 2026-10-12)
+
+URLs were checked with HEAD requests (HTTP 200) on that date. Licences are what each page says; check them again before shipping. "Raw YOLOX" means the output is the same undecoded
+`[1, anchors, 5 + classes]` layout the app already decodes (verified by running the files on the host), so only the class count and the label list differ.
+The app does not load models from phone storage yet: today a model must be converted on a PC (6.1) and added to `assets/` (6.2).
+
+**Drop-in, raw YOLOX output (Apache-2.0)**
+
+| Model | Classes / input | Download |
+|---|---|---|
+| YOLOX-nano, COCO, ready-made GPU-clean TFLite (FP16, 2.1 MB) | 80 / 416 | https://huggingface.co/litert-community/yolox-nano-litert/resolve/main/yolox_nano.tflite |
+| YOLOX-Tiny / S / M, the same kind of ready-made TFLite (9.9 / about 36 / 48.7 MB) | 80 / 416, 640, 640 | https://huggingface.co/litert-community/yolox-tiny-litert, `.../yolox-s-litert`, `.../yolox-m-litert` (file `yolox_<size>.tflite`) |
+| Official YOLOX ONNX nano (3.5 MB), M (96.6 MB), L (206.7 MB), Darknet (243.0 MB) (convert with 6.1) | 80 | https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx (also `yolox_m.onnx`, `yolox_l.onnx`, `yolox_darknet.onnx`) |
+| **US licence plates**, YOLOX-S fine-tuned on about 20k images, AP50:95 90.1 (34.1 MB) | 1 (`license_plate`) / 640 | https://huggingface.co/autolane/yolox-s-alpr/resolve/main/yolox_plates_s.onnx (card: https://huggingface.co/autolane/yolox-s-alpr; the int8 TFLite there is not GPU-friendly, convert the ONNX) |
+| **Traffic lights**, Autoware whole-image detector, YOLOX-S (34.1 MB) | 3 (`BACKGROUND`, `traffic_light`, `pedestrian_traffic_light`) / 960 | https://huggingface.co/AutowareFoundation/tensorrt_yolox/resolve/main/yolox_s_car_ped_tl_detector_960_960_batch_1.onnx (labels: `.../car_ped_tl_detector_labels.txt`) |
+| **Traffic light fine detector**, TIER IV YOLOX-S (34.1 MB), meant for refining ROIs but runs on whole images | 3 / 416 | https://huggingface.co/AutowareFoundation/traffic_light_fine_detector/resolve/main/tlr_car_ped_yolox_s_batch_1.onnx |
+| **Body / head / hand**, PINTO YOLOX family (Apache-2.0 repo; the TFLite-only nano archive is 9.7 MB; other archives are 0.2-14 GB and mix many formats; not inspected, check the layout and quantisation) | 3 (body, head, hand) | https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/426_YOLOX-Body-Head-Hand/resources_n_tflite.tar.gz (folder: https://github.com/PINTO0309/PINTO_model_zoo/tree/main/426_YOLOX-Body-Head-Hand) |
+
+Autoware also publishes generic vehicle/pedestrian detectors (`yolox-sPlus-T4-960x960-pseudo-finetune.onnx`, 56.6 MB, classes CAR, TRUCK, BUS, BICYCLE, MOTORBIKE, PEDESTRIAN, ANIMAL; not
+inspected, the s-Plus variants may differ) in the same repository; its `yolox-tiny.onnx` has a TensorRT NMS plugin attached and will not run here.
+
+**Other architectures (need a new decoder; output layouts not verified here)**
+
+| Model | Notes | Download |
+|---|---|---|
+| MediaPipe EfficientDet-Lite0 (13.2 MB; int8 4.4 MB) and Lite2 (22.0 MB), COCO | TFLite, Apache-2.0 according to a third-party wrapper, confirm on Google's model card | https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite and `.../efficientdet_lite2/float32/1/efficientdet_lite2.tflite` |
+| MediaPipe SSD MobileNet V2 (10.8 MB), COCO | TFLite | https://storage.googleapis.com/mediapipe-models/object_detector/ssd_mobilenet_v2/float32/1/ssd_mobilenet_v2.tflite |
+| BlazeFace short range, faces (0.2 MB) | TFLite, MediaPipe | https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite |
+| YuNet, faces (0.2 MB) | ONNX from OpenCV Zoo (MIT there); a TFLite mirror says BSD-3 | https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx, https://huggingface.co/litert-community/YuNet-Face-LiteRT |
+| RT-DETRv2, D-FINE, RF-DETR (no NMS step), COCO | Apache-2.0; LiteRT versions are split in two graphs | https://huggingface.co/onnx-community/rtdetr_v2_r18vd-ONNX, https://huggingface.co/litert-community/RT-DETRv2-S-LiteRT, https://huggingface.co/litert-community/D-FINE-S-LiteRT, https://huggingface.co/litert-community/RF-DETR-Nano-LiteRT |
+| RT-DETR fine-tuned on licence plates | Apache-2.0 | https://huggingface.co/Topurrra/rtdetr-license-plate-detection-onnx |
+| SSDLite MobileNetV3 320 | BSD-3 | https://huggingface.co/mlboydaisuke/ssdlite320-mobilenetv3-litert |
+| Snow-throw sign detector, YOLOX-Tiny fine-tuned (Japanese motorway signs), outputs `boxes` and `scores` for 200 candidates, input 1280x736 | Apache-2.0; not raw YOLOX | https://huggingface.co/infra-intelligence/snow-throw-sign-yolox-tiny |
+
+**Licence traps.** Hugging Face has many fine-tuned detectors (faces, PPE, helmets, wildlife, fire/smoke) whose cards say Apache-2.0, MIT or CC BY 4.0 but whose names or model
+cards show they were trained with Ultralytics YOLOv8 / YOLO11 / YOLO26 (for example `AdamCodd/YOLOv11n-face-detection`, `UWyo/wildlife-*`, `Hexmon/vyra-yolo-ppe-detection`,
+`pyronear/yolo11s_sensitive-detector`). Ultralytics code and weights are AGPL-3.0, and a card's own licence tag does not change what the model was derived from, so avoid them for an app
+that may become closed or paid. Datasets have their own terms too (for example VisDrone for the UAV YOLOX-Nano-P2 checkpoints, MIT but `.pth` only and not raw YOLOX).
+
+**To get a model for another kind of detection:** fine-tune YOLOX yourself from the official COCO weights (https://yolox.readthedocs.io/en/latest/train_custom_data.html), export to ONNX
+and convert as in 6.1; that keeps Apache-2.0 end to end.
+
+### 6.4 Tried and discarded
 
 - **YOLO11 (AGPL-3.0)** was the original model (`yolo11s`, `yolo11s_480`) and is gone from this repository for licensing reasons; its history stays in the old repository
   (https://github.com/jgomezsa/android_Yolo11_onnx), including these experiments:
@@ -259,14 +301,14 @@ Milliseconds from the `Inference` log. "run" is the model, "frame" is the whole 
 
 | Backend | Model | Load | run ms | frame ms | notes |
 |---|---|---|---|---|---|
-| GPU | YOLOX-s 640 | 1.1-1.2 s cold, 0.17-0.24 s cached | 45-60 | 63-125 | about 10-15 fps |
+| GPU | YOLOX-S 640 | 1.1-1.2 s cold, 0.17-0.24 s cached | 45-60 | 63-125 | about 10-15 fps |
 | GPU | YOLOX-Tiny 416 | 1.4 s cold, 0.24 s cached | 20-30 | 36-50 | about 20-25 fps |
 | CPU (LiteRT, XNNPACK) | YOLOX-Tiny 416 | 0.16 s | about 76 | about 95 | about 10 fps |
-| CPU (LiteRT, XNNPACK) | YOLOX-s 640 | 0.4 s | about 290 | about 310 | about 3 fps |
+| CPU (LiteRT, XNNPACK) | YOLOX-S 640 | 0.4 s | about 290 | about 310 | about 3 fps |
 
 - Numbers vary with scene, temperature and background load; the phone was often charging and warm. Decode takes under 3 ms, preprocessing 3-10 ms.
 - Camera conversion and the Camera2 path cost a bit more than CameraX did, but the 0.6x lens is reachable.
-- Published COCO accuracy (AP, from memory): YOLOX-s 40.5, YOLOX-Tiny about 32.8; YOLO11s was 47.0 (the price of the permissive licence).
+- Published COCO accuracy (AP, from memory): YOLOX-S 40.5, YOLOX-Tiny about 32.8; YOLO11s was 47.0 (the price of the permissive licence).
 - There is no load-time limit any more (the user picks the model); the GPU path still caches compiled programs so only the first start of each model pays the compilation.
 
 ## 8. Icons

@@ -5,7 +5,7 @@ live, using an AI model that runs entirely **on the phone**. No internet connect
 no image ever leaves the device.
 
 - Recognises the 80 everyday object classes of the COCO dataset (person, car, bottle, laptop, cat, ...)
-- Two models to choose from: **YOLOX-s** (more accurate) and **YOLOX-Tiny** (faster)
+- Two models to choose from: **YOLOX-S** (more accurate) and **YOLOX-Tiny** (faster)
 - Runs on the phone's **GPU** when it can, and on the CPU when it cannot
 - Zoom from the ultrawide lens up to 10x on phones that allow it
 - Records videos with the boxes drawn on
@@ -70,7 +70,7 @@ You can also open the folder in Android Studio and press Run.
 1. Open **Object Detection** and allow the **Camera** permission.
 2. Point the camera at objects. Each one gets a coloured box with its name and a confidence percentage.
 3. The number in the top-left corner is how long the last frame took to process, in milliseconds. The lower it is, the smoother the detection. The small graph to its left shows the same time for the last 50 frames.
-4. The top-right corner shows the model in use. **Tap its name** to switch between **YOLOX-s** and **YOLOX-Tiny**; your choice is remembered. Loading a model can take a few seconds
+4. The top-right corner shows the model in use. **Tap its name** to switch between **YOLOX-S** and **YOLOX-Tiny**; your choice is remembered. Loading a model can take a few seconds
    the first time ("Loading..." is shown). Below the name, the chip icon tells you whether the phone's GPU is doing the work (teal **GPU**) or the app had to use the CPU (amber **No GPU**, slower).
 5. Below the picture, the slider with points (for example 0.6x, 1x, 2x, 5x, 10x) sets the camera zoom: tap a point, slide along the line, or pinch on the picture. The points
    depend on what your phone's camera can do; 0.6x is the ultrawide lens on phones that make it available to apps.
@@ -91,7 +91,7 @@ Camera frame -> resize and pad to a square -> AI model on the GPU (or CPU) -> ra
 1. **Camera.** The app reads the camera with Android's Camera2 interface. It looks for the back camera that can zoom out the furthest (some phones hide their
    ultrawide camera from simple camera libraries) and falls back to the normal one if that cannot be opened. The picture on screen is the very frame that was analysed, so the
    boxes always match what you see, even on moving objects. If the analysis falls behind, camera frames are simply skipped.
-2. **Preparation.** The camera's YUV image is converted to colour and rotated upright. The model expects a square picture (640x640 for YOLOX-s, 416x416 for YOLOX-Tiny): the frame is
+2. **Preparation.** The camera's YUV image is converted to colour and rotated upright. The model expects a square picture (640x640 for YOLOX-S, 416x416 for YOLOX-Tiny): the frame is
    scaled to fit inside it and the unused space is filled with grey so nothing is stretched.
 3. **The model.** [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) is a neural network trained on the COCO dataset. In one pass it looks at the whole picture and proposes
    thousands of candidate boxes, each with a score for every one of the 80 classes. It runs through
@@ -103,7 +103,7 @@ Camera frame -> resize and pad to a square -> AI model on the GPU (or CPU) -> ra
 Some details that keep it fast and robust:
 
 - **GPU first, CPU as the fallback.** For every model the app tries the GPU. If the model cannot be compiled or run there (it even does a test run to make sure), it uses the CPU instead.
-  YOLOX-Tiny is fast enough on the CPU to be usable; YOLOX-s is slow there.
+  YOLOX-Tiny is fast enough on the CPU to be usable; YOLOX-S is slow there.
 - **GPU program cache.** Before the first run the GPU needs the model translated into programs for that specific chip, which takes a second or two.
   The result is saved in the app's cache folder, so later starts skip that step. If the model file changes, the cache key changes with it.
 - **Everything is local.** The models are bundled inside the app; nothing is downloaded or uploaded.
@@ -146,7 +146,7 @@ More technical detail (architecture, the camera, models and how to convert them,
 
 ## Third-party components and licences
 
-- **[YOLOX](https://github.com/Megvii-BaseDetection/YOLOX)** (Megvii) models, Apache-2.0. The bundled files are the official YOLOX-s and YOLOX-Tiny ONNX models converted to TFLite
+- **[YOLOX](https://github.com/Megvii-BaseDetection/YOLOX)** (Megvii) models, Apache-2.0. The bundled files are the official YOLOX-S and YOLOX-Tiny ONNX models converted to TFLite
   (`onnx2tf`, static shapes), so they are modified copies.
 - **LiteRT, Jetpack Compose and the AndroidX libraries**, Apache-2.0.
 - **COCO** class names and the dataset the models were trained on: annotations are CC BY 4.0 ([cocodataset.org](https://cocodataset.org/#termsofuse)).

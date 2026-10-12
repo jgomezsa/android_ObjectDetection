@@ -64,7 +64,7 @@ class ZoomPresetsTest {
 
     @Test
     fun modelNames() {
-        assertEquals("YOLOX-s", modelDisplayName("yolox_s"))
+        assertEquals("YOLOX-S", modelDisplayName("yolox_s"))
         assertEquals("YOLOX-Tiny", modelDisplayName("yolox_tiny"))
         assertEquals("rtdetr", modelDisplayName("rtdetr"))
         assertEquals(listOf("yolox_s", "yolox_tiny"), MODELS)
