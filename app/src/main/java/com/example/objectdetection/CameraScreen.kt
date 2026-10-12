@@ -28,8 +28,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,9 +62,9 @@ import kotlin.math.roundToInt
 /** Number of recent frames shown in the processing-time plot. */
 private const val FRAME_HISTORY = 50
 
-/** Range of the confidence slider. */
-private const val THRESHOLD_MIN = 0.05f
-private const val THRESHOLD_MAX = 0.95f
+/** Range of the confidence slider (1% steps). */
+private const val THRESHOLD_MIN = 0.01f
+private const val THRESHOLD_MAX = 0.99f
 
 /**
  * Loads [model] on the first backend that can run it: for a TFLite model the GPU, then the CPU (or only the one a developer forces);
@@ -317,7 +315,7 @@ fun CameraScreen(
             }
             // Controls below the picture, never on top of it.
             Column(
-                modifier = Modifier.fillMaxWidth().height(176.dp).padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().height(156.dp).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
                 if (!loading) ThresholdSlider(
@@ -599,22 +597,37 @@ private fun FrameView(frame: ShownFrame, modifier: Modifier = Modifier) {
 }
 
 
-/** Minimal confidence control above the zoom line: the label with the current threshold, and a slider from 5% to 95% in steps of 5. */
+/** Minimal confidence control above the zoom line: a short label with the threshold, and a thin line with a small thumb, in 1% steps. Tap or drag. */
 @Composable
 private fun ThresholdSlider(value: Float, onChange: (Float) -> Unit, onChangeFinished: () -> Unit, modifier: Modifier = Modifier) {
+    val line = Color(0xFF9CA3AF)
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("Confidence ${(value * 100).roundToInt()}%", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(128.dp))
-        Slider(
-            value = value,
-            onValueChange = { onChange((it * 20).roundToInt() / 20f) },
-            onValueChangeFinished = onChangeFinished,
-            valueRange = THRESHOLD_MIN..THRESHOLD_MAX,
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color(0xFF6B7280),
-            ),
-            modifier = Modifier.weight(1f),
-        )
+        Text("Conf. ${(value * 100).roundToInt()}%", color = Color.White, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(76.dp))
+        Canvas(
+            modifier = Modifier
+                .weight(1f)
+                .height(28.dp)
+                .pointerInput(Unit) {
+                    val pad = 8.dp.toPx()
+                    fun at(x: Float) = (THRESHOLD_MIN + (THRESHOLD_MAX - THRESHOLD_MIN) * ((x - pad) / (size.width - 2 * pad)).coerceIn(0f, 1f))
+                        .let { (it * 100).roundToInt() / 100f }
+                    detectTapGestures { tap ->
+                        onChange(at(tap.x))
+                        onChangeFinished()
+                    }
+                }
+                .pointerInput(Unit) {
+                    val pad = 8.dp.toPx()
+                    fun at(x: Float) = (THRESHOLD_MIN + (THRESHOLD_MAX - THRESHOLD_MIN) * ((x - pad) / (size.width - 2 * pad)).coerceIn(0f, 1f))
+                        .let { (it * 100).roundToInt() / 100f }
+                    detectHorizontalDragGestures(onDragEnd = onChangeFinished) { change, _ -> onChange(at(change.position.x)) }
+                },
+        ) {
+            val pad = 8.dp.toPx()
+            val width = size.width - 2 * pad
+            val x = pad + width * (value - THRESHOLD_MIN) / (THRESHOLD_MAX - THRESHOLD_MIN)
+            drawLine(line, Offset(pad, size.height / 2), Offset(pad + width, size.height / 2), strokeWidth = 1.dp.toPx())
+            drawCircle(Color.White, radius = 5.dp.toPx(), center = Offset(x, size.height / 2))
+        }
     }
 }
