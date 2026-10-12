@@ -84,7 +84,7 @@ class LiteRtDetector(context: Context, private val info: ModelInfo, override val
         return outputBuffers.map { it.readFloat() }
     }
 
-    override fun detect(bitmap: Bitmap): DetectionResult {
+    override fun detect(bitmap: Bitmap, threshold: Float): DetectionResult {
         val t0 = System.nanoTime()
         val letterbox = Letterbox(bitmap.width, bitmap.height, spec.inputSize, spec.stretch)
         InputPacker.nhwc(renderer.render(bitmap, letterbox), spec.convention, input)
@@ -95,7 +95,7 @@ class LiteRtDetector(context: Context, private val info: ModelInfo, override val
         val raw = outputBuffers.map { it.readFloat() }
         val t2 = System.nanoTime()
 
-        val detections = OutputDecoders.decode(spec, raw, letterbox, names)
+        val detections = OutputDecoders.decode(spec, raw, letterbox, names, threshold)
         val t3 = System.nanoTime()
         return DetectionResult(
             detections,

@@ -13,7 +13,7 @@ class ModelInstaller(
     private val store: ModelStore,
     private val downloader: ModelDownloader = ModelDownloader(),
 ) {
-    fun install(modelUrl: String, labelsUrl: String, progress: (message: String, fraction: Float?) -> Unit, isCancelled: () -> Boolean): ModelInfo {
+    fun install(modelUrl: String, labelsUrl: String, name: String, progress: (message: String, fraction: Float?) -> Unit, isCancelled: () -> Boolean): ModelInfo {
         val parsed = ModelUrl.parse(modelUrl)
         val labelsParsed = labelsUrl.takeIf { it.isNotBlank() }?.let { ModelUrl.parse(it) }
         val temp = File(context.cacheDir, "download-${System.nanoTime()}.part")
@@ -47,7 +47,7 @@ class ModelInstaller(
             if (labels.isNotEmpty() && spec.layout != OutputLayout.END2END && labels.size != spec.numClasses) {
                 throw ModelRejectedException("The model has ${spec.numClasses} classes but the class names file lists ${labels.size}.")
             }
-            return store.install(temp, format, ModelUrl.displayName(parsed.fileName), spec, labels, parsed.url)
+            return store.install(temp, format, ModelUrl.chooseName(name, parsed.fileName), spec, labels, parsed.url)
         } finally {
             temp.delete()
         }

@@ -28,6 +28,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,6 +64,10 @@ import kotlin.math.roundToInt
 /** Number of recent frames shown in the processing-time plot. */
 private const val FRAME_HISTORY = 50
 
+/** Range of the confidence slider. */
+private const val THRESHOLD_MIN = 0.05f
+private const val THRESHOLD_MAX = 0.95f
+
 /**
  * Loads [model] on the first backend that can run it: for a TFLite model the GPU, then the CPU (or only the one a developer forces);
  * an ONNX model runs on the CPU only (ONNX Runtime has no GPU backend here). The user chose the model, so a slow load is accepted.
@@ -91,6 +97,10 @@ fun CameraScreen(
     var showManage by remember { mutableStateOf(false) }
     val startModel = remember { initialModel ?: prefs.getString("model", null)?.takeIf { id -> models.any { it.id == id } } ?: DEFAULT_MODEL }
     val backends = remember { forcedBackend?.let { listOf(it) } ?: BackendChain.DEFAULT_ORDER }
+    // Minimum score for a box to be shown; the analyzer thread reads the atomic copy.
+    val savedThreshold = remember { prefs.getFloat("threshold", OutputDecoders.DEFAULT_THRESHOLD).coerceIn(THRESHOLD_MIN, THRESHOLD_MAX) }
+    var threshold by remember { mutableStateOf(savedThreshold) }
+    val thresholdRef = remember { AtomicReference(savedThreshold) }
     var result by remember { mutableStateOf(DetectionResult(emptyList(), 0)) }
     // The frame on screen together with the detections computed on that very frame, so boxes never lag behind the picture.
     var shown by remember { mutableStateOf<ShownFrame?>(null) }
@@ -199,7 +209,7 @@ fun CameraScreen(
                 shown = ShownFrame(upright, emptyList())
                 return
             }
-            val r = active.detect(upright)
+            val r = active.detect(upright, thresholdRef.get())
             val frameMs = (System.nanoTime() - frameStart) / 1_000_000
             Log.d(
                 "Inference",
@@ -307,9 +317,14 @@ fun CameraScreen(
             }
             // Controls below the picture, never on top of it.
             Column(
-                modifier = Modifier.fillMaxWidth().height(120.dp).padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().height(176.dp).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
+                if (!loading) ThresholdSlider(
+                    value = threshold,
+                    onChange = { threshold = it; thresholdRef.set(it) },
+                    onChangeFinished = { prefs.edit().putFloat("threshold", threshold).apply() },
+                )
                 if (!loading && zoomPoints.value.size >= 2) {
                     ZoomSelector(zoomPoints.value, zoomRatio.value, onChange = setZoom)
                 }
@@ -583,3 +598,23 @@ private fun FrameView(frame: ShownFrame, modifier: Modifier = Modifier) {
     }
 }
 
+
+/** Minimal confidence control above the zoom line: the label with the current threshold, and a slider from 5% to 95% in steps of 5. */
+@Composable
+private fun ThresholdSlider(value: Float, onChange: (Float) -> Unit, onChangeFinished: () -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Confidence ${(value * 100).roundToInt()}%", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(128.dp))
+        Slider(
+            value = value,
+            onValueChange = { onChange((it * 20).roundToInt() / 20f) },
+            onValueChangeFinished = onChangeFinished,
+            valueRange = THRESHOLD_MIN..THRESHOLD_MAX,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color(0xFF6B7280),
+            ),
+            modifier = Modifier.weight(1f),
+        )
+    }
+}

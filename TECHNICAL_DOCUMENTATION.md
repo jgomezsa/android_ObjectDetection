@@ -86,7 +86,7 @@ Camera2 ImageReader (YUV_420_888, 3 buffers, acquireLatestImage, 4:3 around 1280
   -> LetterboxRenderer: scale to fit a square (gray 114 padding) -> ARGB pixels
   -> NHWC float tensor, BGR 0..255 (YOLOX is not normalised)
   -> model -> [1, anchors, 85]  (raw x, y, w, h + objectness + 80 class scores per anchor; anchors = 8400 at 640, 3549 at 416)
-  -> YoloxPostProcessor.decode: grid/stride decode, score = objectness x class, > 0.25, class-aware NMS (IoU 0.45), map back to normalized source coordinates
+  -> YoloxPostProcessor.decode: grid/stride decode, score = objectness x class, > the confidence threshold (slider, default 0.25), class-aware NMS (IoU 0.45), map back to normalized source coordinates
   -> ShownFrame(bitmap, detections) published to Compose state; FrameView draws that same bitmap letterboxed on a Canvas and the boxes on top
 ```
 
@@ -249,7 +249,7 @@ loading later only verifies the sizes. Each layout fixes the preprocessing and t
 | `V8_ROWS` | the same transposed | RGB 0..1 | letterbox | as above |
 | `END2END` (YOLOv10) | `[1, 300, 6]` x1, y1, x2, y2, score, class | RGB 0..1 | letterbox | threshold only (pixels or fractions) |
 | `DETR_SPLIT` (RT-DETR, D-FINE) | logits `[1, Q, C]` + boxes `[1, Q, 4]` (normalised cx, cy, w, h), either order | RGB 0..1 | stretched to the square | sigmoid of the best logit > 0.3, no NMS |
-| `DETR_MERGED` | `[1, Q, 4 + C]` normalised box, probabilities | RGB 0..1 | stretched | threshold 0.3 |
+| `DETR_MERGED` | `[1, Q, 4 + C]` normalised box, probabilities | RGB 0..1 | stretched | threshold (slider) |
 
 Disambiguation: channels-first is tried before rows; the box values decide pixels (above 64), fractions (up to 1.5) or YOLOX raw offsets (small, with 5 + C columns); scores must be probabilities (-0.05..1.05); an
 unknown-shape output is also tried as `Q x (4 + C)` for common query counts. Rejections explain why. Found on real files: Ultralytics TFLite exports have *normalised* boxes and 42000 values that also fit 300 queries x 140, so
@@ -278,7 +278,7 @@ Source: the official YOLOX release ONNX files
 
 **Model contract.** Input: BGR, 0..255 float, no normalisation, letterboxed with gray 114. Output (the released ONNX is *not* decoded): per anchor `x, y` are offsets from the grid
 cell, `w, h` are log sizes in strides, objectness and the 80 class scores are already sigmoided. `YoloxPostProcessor` decodes `(x + gx) * stride`, `exp(w) * stride`,
-score = objectness x class score, threshold 0.25, class-aware NMS 0.45. Anchors are the grids of strides 8, 16, 32 one after the other, row by row (6400 + 1600 + 400 at 640;
+score = objectness x class score, threshold = the confidence slider (default 0.25), class-aware NMS 0.45. Anchors are the grids of strides 8, 16, 32 one after the other, row by row (6400 + 1600 + 400 at 640;
 2704 + 676 + 169 at 416). The input size is read from the model, so other sizes (multiples of 32) work.
 
 ### 6.1 Conversion (ONNX to TFLite for the GPU)

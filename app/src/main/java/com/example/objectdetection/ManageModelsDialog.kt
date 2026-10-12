@@ -73,6 +73,7 @@ fun ManageModelsDialog(
     onDismiss: () -> Unit,
 ) {
     var modelUrl by remember { mutableStateOf("") }
+    var modelName by remember { mutableStateOf("") }
     var labelsUrl by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<AddStatus>(AddStatus.Idle) }
     var pendingDelete by remember { mutableStateOf<ModelInfo?>(null) }
@@ -84,9 +85,10 @@ fun ManageModelsDialog(
         status = AddStatus.Working("Starting…", null)
         val url = modelUrl
         val labels = labelsUrl
+        val name = modelName
         Thread({
             status = try {
-                val added = installer.install(url, labels, { message, fraction -> status = AddStatus.Working(message, fraction) }, { cancelled.get() })
+                val added = installer.install(url, labels, name, { message, fraction -> status = AddStatus.Working(message, fraction) }, { cancelled.get() })
                 onChanged()
                 AddStatus.Added(added.displayName)
             } catch (e: ModelRejectedException) {
@@ -148,6 +150,14 @@ fun ManageModelsDialog(
                             singleLine = true,
                             enabled = !working,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = modelName,
+                            onValueChange = { modelName = it.take(40) },
+                            label = { Text("Name (optional)") },
+                            singleLine = true,
+                            enabled = !working,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(

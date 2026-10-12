@@ -87,14 +87,14 @@ class OrtDetector(@Suppress("UNUSED_PARAMETER") context: Context, private val in
         }
     }
 
-    override fun detect(bitmap: Bitmap): DetectionResult {
+    override fun detect(bitmap: Bitmap, threshold: Float): DetectionResult {
         val t0 = System.nanoTime()
         val letterbox = Letterbox(bitmap.width, bitmap.height, size, spec.stretch)
         InputPacker.nchw(renderer.render(bitmap, letterbox), spec.convention, inputBuffer)
         val t1 = System.nanoTime()
         val raw = runOnInput()
         val t2 = System.nanoTime()
-        val detections = OutputDecoders.decode(spec, raw, letterbox, names)
+        val detections = OutputDecoders.decode(spec, raw, letterbox, names, threshold)
         val t3 = System.nanoTime()
         return DetectionResult(
             detections,

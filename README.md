@@ -73,7 +73,7 @@ You can also open the folder in Android Studio and press Run.
 3. The number in the top-left corner is how long the last frame took to process, in milliseconds. The lower it is, the smoother the detection. The small graph to its left shows the same time for the last 50 frames.
 4. The top-right corner shows the model in use. **Tap its name** to open the model menu and switch to another model; your choice is remembered. Loading a model can take a few seconds
    the first time ("Loading..." is shown). The last entry, **Manage models…**, lets you add and delete models (see [Adding your own models](#adding-your-own-models)). Below the name, the chip icon tells you whether the phone's GPU is doing the work (teal **GPU**) or the app had to use the CPU (amber **No GPU**, slower).
-5. Below the picture, the slider with points (for example 0.6x, 1x, 2x, 5x, 10x) sets the camera zoom: tap a point, slide along the line, or pinch on the picture. The points
+5. Below the picture, the **Confidence** slider (5% to 95%, remembered) sets how sure the model must be before a box is shown: lower it to see more boxes, raise it to see only the sure ones. Under it, the slider with points (for example 0.6x, 1x, 2x, 5x, 10x) sets the camera zoom: tap a point, slide along the line, or pinch on the picture. The points
    depend on what your phone's camera can do; 0.6x is the ultrawide lens on phones that make it available to apps.
 6. The **Stop** button below the picture pauses the detection (the camera keeps showing the live view, and no boxes are drawn). Press **Start** to resume.
 7. The **Record** button next to it saves a video of what the camera sees, with the boxes drawn on. While recording it shows the elapsed time; press it again to stop. The video is saved in the **Movies/ObjectDetection** folder of your phone (it also shows up in your gallery). Pausing the detection also ends the recording.
@@ -83,7 +83,7 @@ There is nothing else to configure: for each model the app tries the GPU first a
 ## Adding your own models
 
 Open the model menu and choose **Manage models…**. The list shows every model: the built-in **YOLOX-S** and **YOLOX-Tiny** (they cannot be deleted) and the ones you added (each has a **Delete**
-button). Under **Add a model from a web address**, type the address of a model file (it must start with `https://`), optionally the address of a text file with the class names, and press
+button). Under **Add a model from a web address**, type the address of a model file (it must start with `https://`), optionally a name for the model (otherwise the file name is used) and the address of a text file with the class names, and press
 **Download and add**. The app downloads the file, finds out its format, loads it once to check that it fits, and only then adds it to the list; if something is wrong, it tells you what.
 A model you add is not selected automatically: pick it from the model menu. Models are stored in the app's private storage and are removed when you delete them (or uninstall the app).
 

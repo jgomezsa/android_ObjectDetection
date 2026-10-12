@@ -134,6 +134,19 @@ class OutputDecodersTest {
     }
 
     @Test
+    fun thresholdControlsWhichDetectionsAreKept() {
+        val spec = ModelSpec(OutputLayout.V8_CHANNELS_FIRST, 640, 80)
+        val raw = channelsFirst(
+            floatArrayOf(1f, 100f, 100f, 40f, 40f, 2f, 0.9f),
+            floatArrayOf(2f, 300f, 300f, 40f, 40f, 3f, 0.4f),
+        )
+        assertEquals(2, OutputDecoders.decode(spec, listOf(raw), square, names).size)
+        assertEquals(2, OutputDecoders.decode(spec, listOf(raw), square, names, 0.3f).size)
+        assertEquals(listOf(0.9f), OutputDecoders.decode(spec, listOf(raw), square, names, 0.5f).map { it.score })
+        assertEquals(0, OutputDecoders.decode(spec, listOf(raw), square, names, 0.95f).size)
+    }
+
+    @Test
     fun namesFallBackToClassNumbers() {
         val spec = ModelSpec(OutputLayout.V8_CHANNELS_FIRST, 640, 80)
         val raw = channelsFirst(floatArrayOf(1f, 100f, 100f, 40f, 40f, 4f, 0.9f))

@@ -6,23 +6,24 @@ import kotlin.math.roundToInt
 
 /** Turns the raw output(s) of a model of any supported [OutputLayout] into detections with normalised boxes. */
 object OutputDecoders {
-    private const val CONF = 0.25f
-    private const val DETR_CONF = 0.3f
+    const val DEFAULT_THRESHOLD = 0.25f
     private const val IOU = 0.45f
 
-    fun decode(spec: ModelSpec, outputs: List<FloatArray>, lb: Letterbox, names: List<String>): List<Detection> = when (spec.layout) {
-        OutputLayout.YOLOX_ROWS -> YoloxPostProcessor.decode(outputs[0], spec.inputSize, lb, CONF, IOU, spec.numClasses, names)
-        OutputLayout.V8_CHANNELS_FIRST -> yolov8(outputs[0], spec, lb, names, channelsFirst = true)
-        OutputLayout.V8_ROWS -> yolov8(outputs[0], spec, lb, names, channelsFirst = false)
-        OutputLayout.DETR_SPLIT -> detrSplit(outputs[spec.logitsIndex], outputs[spec.boxesIndex], spec, lb, names)
-        OutputLayout.DETR_MERGED -> detrMerged(outputs[0], spec, lb, names)
-        OutputLayout.END2END -> end2end(outputs[0], spec, lb, names)
+    fun decode(
+        spec: ModelSpec, outputs: List<FloatArray>, lb: Letterbox, names: List<String>, threshold: Float = DEFAULT_THRESHOLD,
+    ): List<Detection> = when (spec.layout) {
+        OutputLayout.YOLOX_ROWS -> YoloxPostProcessor.decode(outputs[0], spec.inputSize, lb, threshold, IOU, spec.numClasses, names)
+        OutputLayout.V8_CHANNELS_FIRST -> yolov8(outputs[0], spec, lb, names, threshold, channelsFirst = true)
+        OutputLayout.V8_ROWS -> yolov8(outputs[0], spec, lb, names, threshold, channelsFirst = false)
+        OutputLayout.DETR_SPLIT -> detrSplit(outputs[spec.logitsIndex], outputs[spec.boxesIndex], spec, lb, names, threshold)
+        OutputLayout.DETR_MERGED -> detrMerged(outputs[0], spec, lb, names, threshold)
+        OutputLayout.END2END -> end2end(outputs[0], spec, lb, names, threshold)
     }
 
     private fun label(names: List<String>, classId: Int) = names.getOrElse(classId) { "class $classId" }
 
     /** YOLOv8 / YOLO11: pixel box centre and size, then one probability per class (no objectness); NMS is applied here. */
-    private fun yolov8(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>, channelsFirst: Boolean): List<Detection> {
+    private fun yolov8(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>, threshold: Float, channelsFirst: Boolean): List<Detection> {
         val rows = spec.anchors
         val classes = spec.numClasses
         val k = 4 + classes
@@ -30,7 +31,7 @@ object OutputDecoders {
         val boxScale = if (spec.normalizedBoxes) spec.inputSize.toFloat() else 1f
         for (i in 0 until rows) {
             var best = -1
-            var bestScore = CONF
+            var bestScore = threshold
             for (c in 0 until classes) {
                 val s = if (channelsFirst) raw[(4 + c) * rows + i] else raw[i * k + 4 + c]
                 if (s > bestScore) {
@@ -49,7 +50,7 @@ object OutputDecoders {
     }
 
     /** DETR / RT-DETR / D-FINE with separate outputs: class logits (sigmoid scores) and normalised centre/size boxes. No NMS is needed. */
-    private fun detrSplit(logits: FloatArray, boxes: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>): List<Detection> {
+    private fun detrSplit(logits: FloatArray, boxes: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>, threshold: Float): List<Detection> {
         val out = ArrayList<Detection>()
         val classes = spec.numClasses
         for (q in 0 until spec.queries) {
@@ -63,20 +64,20 @@ object OutputDecoders {
                 }
             }
             val score = 1f / (1f + exp(-bestLogit))
-            if (score <= DETR_CONF) continue
+            if (score <= threshold) continue
             addNormalisedBox(out, boxes[q * 4], boxes[q * 4 + 1], boxes[q * 4 + 2], boxes[q * 4 + 3], best, score, spec, lb, names)
         }
         return out
     }
 
     /** One output `[queries, 4 + classes]`: normalised centre/size, then class probabilities. */
-    private fun detrMerged(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>): List<Detection> {
+    private fun detrMerged(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>, threshold: Float): List<Detection> {
         val out = ArrayList<Detection>()
         val classes = spec.numClasses
         val k = 4 + classes
         for (q in 0 until spec.queries) {
             var best = -1
-            var bestScore = DETR_CONF
+            var bestScore = threshold
             for (c in 0 until classes) {
                 val s = raw[q * k + 4 + c]
                 if (s > bestScore) {
@@ -99,17 +100,17 @@ object OutputDecoders {
     }
 
     /** `[queries, 6]`: x1, y1, x2, y2, score, class. The corners are input pixels, or 0..1 fractions when none is above 1.5. */
-    private fun end2end(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>): List<Detection> {
+    private fun end2end(raw: FloatArray, spec: ModelSpec, lb: Letterbox, names: List<String>, threshold: Float): List<Detection> {
         var maxCoordinate = 0f
         for (q in 0 until spec.queries) {
-            if (raw[q * 6 + 4] <= CONF) continue
+            if (raw[q * 6 + 4] <= threshold) continue
             for (c in 0 until 4) maxCoordinate = maxOf(maxCoordinate, raw[q * 6 + c])
         }
         val scale = if (maxCoordinate <= 1.5f) spec.inputSize.toFloat() else 1f
         val out = ArrayList<Detection>()
         for (q in 0 until spec.queries) {
             val score = raw[q * 6 + 4]
-            if (score <= CONF) continue
+            if (score <= threshold) continue
             val classId = raw[q * 6 + 5].roundToInt()
             YoloPostProcessor.toDetection(
                 raw[q * 6] * scale, raw[q * 6 + 1] * scale, raw[q * 6 + 2] * scale, raw[q * 6 + 3] * scale,

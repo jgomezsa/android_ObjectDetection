@@ -40,6 +40,9 @@ object ModelUrl {
         return Parsed(trimmed, lastSegment)
     }
 
+    /** The name to show for a model: what the user typed (trimmed, at most 40 characters), or the file name without its extension when that is blank. */
+    fun chooseName(given: String, fileName: String): String = given.trim().take(40).trim().ifEmpty { displayName(fileName) }
+
     /** A readable model name from a file name: the file name without its extension. */
     fun displayName(fileName: String): String {
         val withoutExtension = fileName.removeSuffix(".tflite").removeSuffix(".onnx").removeSuffix(".TFLITE").removeSuffix(".ONNX")

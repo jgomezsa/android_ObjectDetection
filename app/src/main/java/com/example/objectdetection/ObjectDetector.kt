@@ -20,8 +20,8 @@ interface ObjectDetector : AutoCloseable {
     /** Backend the model is running on (the GPU, or the CPU when the GPU could not run it). */
     val backend: Backend
 
-    /** [bitmap] must already be upright (rotation applied). Boxes are normalized to it. */
-    fun detect(bitmap: Bitmap): DetectionResult
+    /** [bitmap] must already be upright (rotation applied). Boxes are normalized to it; only detections scoring above [threshold] are kept. */
+    fun detect(bitmap: Bitmap, threshold: Float = OutputDecoders.DEFAULT_THRESHOLD): DetectionResult
 }
 
 /** Draws a frame into a square model input, letterboxed on gray or stretched (see [Letterbox]), and returns its ARGB pixels. */

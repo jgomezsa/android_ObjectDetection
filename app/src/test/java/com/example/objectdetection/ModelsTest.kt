@@ -77,4 +77,12 @@ class ModelsTest {
         assertEquals("model", parsed.fileName)
         assertEquals("model", ModelUrl.displayName("model"))
     }
+
+    @Test
+    fun chosenNameWinsOverTheFileName() {
+        assertEquals("Potholes", ModelUrl.chooseName("  Potholes ", "best.tflite"))
+        assertEquals("best", ModelUrl.chooseName("", "best.tflite"))
+        assertEquals("best", ModelUrl.chooseName("   ", "best.tflite"))
+        assertEquals(40, ModelUrl.chooseName("x".repeat(100), "best.tflite").length)
+    }
 }
